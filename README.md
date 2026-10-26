@@ -144,7 +144,7 @@ MiniEcommerce/
 2. Создать/обновить схему БД по миграциям, передав строку подключения через переменную окружения `MINIECOMMERCE_DB`:
 
    ```powershell
-   $env:MINIECOMMERCE_DB = "Server=localhost;Database=MiniEcommerce;Trusted_Connection=True;TrustServerCertificate=True;"
+   $env:MINIECOMMERCE_DB = "Server=localhost;Database=MiniEcommerce_Advanced;Trusted_Connection=True;TrustServerCertificate=True;"
    dotnet ef database update --project src/Backend/PS.MiniEcommerce/PS.MiniEcommerce.Infrastructure --startup-project src/Backend/PS.MiniEcommerce/PS.MiniEcommerce.API
    ```
 
@@ -176,7 +176,7 @@ npm run preview    # предпросмотр production-сборки
 Backend (нужна отдельная тестовая БД; имя должно содержать `_Test`):
 
 ```powershell
-$env:MINIECOMMERCE_TEST_DB = "Server=localhost;Database=MiniEcommerce_Test;Trusted_Connection=True;TrustServerCertificate=True;"
+$env:MINIECOMMERCE_TEST_DB = "Server=localhost;Database=MiniEcommerce_Advanced_Test;Trusted_Connection=True;TrustServerCertificate=True;"
 dotnet test
 ```
 
