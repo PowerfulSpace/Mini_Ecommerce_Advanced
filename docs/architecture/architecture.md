@@ -1,6 +1,3 @@
-> Перевод. Источник истины — [`docs/en/architecture/architecture.md`](../../en/architecture/architecture.md).
-> При расхождении верна английская версия.
-
 # Архитектура бэкенда
 
 ## 1. Назначение
@@ -536,4 +533,4 @@ SQL Server, rowversion, изоляции или поведения затрон�
 - `api.md`
 - `../adr/ADR-001-cart-concurrency.md`
 - `../adr/ADR-002-checkout-idempotency.md`
-- `../../../AGENTS.md`
+- `../../AGENTS.md`

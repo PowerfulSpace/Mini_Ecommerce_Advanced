@@ -1,10 +1,7 @@
-> Перевод. Источник истины — [`docs/en/adr/ADR-002-checkout-idempotency.md`](../../en/adr/ADR-002-checkout-idempotency.md).
-> При расхождении верна английская версия.
-
 # ADR-002: Идемпотентность оформления заказа
 
-- **Status:** Accepted, amended on 2026-10-15 (bounded wait, `503` temporary response, on-demand recovery, key format and fingerprint definition, cart version transmitted through `If-Match`)
-- **Date:** 2026-10-15
+- **Статус:** Принято, изменено 2026-10-15 (ограниченное ожидание, временный ответ `503`, восстановление по требованию, определение формата ключа и отпечатка, передача версии корзины через `If-Match`)
+- **Дата:** 2026-10-15
 
 ## Контекст
 

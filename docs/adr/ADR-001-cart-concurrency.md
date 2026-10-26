@@ -1,10 +1,7 @@
-> Перевод. Источник истины — [`docs/en/adr/ADR-001-cart-concurrency.md`](../../en/adr/ADR-001-cart-concurrency.md).
-> При расхождении верна английская версия.
-
 # ADR-001: Стратегия конкурентного доступа к корзине и блокировок
 
-- **Status:** Accepted, amended on 2026-10-15 (cart version transport moved to `ETag`/`If-Match`, stale-version status changed from `409` to `412`, checkout is required to change the cart row)
-- **Date:** 2026-10-15
+- **Статус:** Принято, изменено 2026-10-15 (передача версии корзины переведена на `ETag`/`If-Match`, статус устаревшей версии изменён с `409` на `412`, checkout обязан изменять строку корзины)
+- **Дата:** 2026-10-15
 
 ## Контекст
 
