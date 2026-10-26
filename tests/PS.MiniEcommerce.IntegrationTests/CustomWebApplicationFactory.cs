@@ -10,15 +10,17 @@ namespace PS.MiniEcommerce.IntegrationTests;
 public class CustomWebApplicationFactory : WebApplicationFactory<Program>
 {
     private readonly string _connectionString;
+    private readonly string _environment;
 
-    public CustomWebApplicationFactory(string connectionString)
+    public CustomWebApplicationFactory(string connectionString, string environment = "Development")
     {
         _connectionString = connectionString;
+        _environment = environment;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        builder.UseEnvironment("Development");
+        builder.UseEnvironment(_environment);
         builder.UseSetting("ConnectionStrings:Default", _connectionString);
 
         builder.ConfigureServices(services =>

@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -45,10 +47,14 @@ public class OrdersController : ControllerBase
             Response.Headers.Location = $"/api/orders/{result.OrderId}";
         }
 
+        var isProblemDetails = result.ResponseStatusCode >= StatusCodes.Status400BadRequest;
+
         return new ContentResult
         {
-            Content = result.ResponsePayload,
-            ContentType = "application/json",
+            Content = isProblemDetails
+                ? EnsureProblemDetailsInstance(result.ResponsePayload, Request.Path)
+                : result.ResponsePayload,
+            ContentType = isProblemDetails ? "application/problem+json" : "application/json",
             StatusCode = result.ResponseStatusCode
         };
     }
@@ -93,6 +99,28 @@ public class OrdersController : ControllerBase
             new CancelOrderCommand(orderId), cancellationToken);
 
         return Ok(order);
+    }
+
+    private static string EnsureProblemDetailsInstance(string payload, PathString path)
+    {
+        try
+        {
+            if (JsonNode.Parse(payload) is not JsonObject problem)
+            {
+                return payload;
+            }
+
+            if (!problem.ContainsKey("instance"))
+            {
+                problem["instance"] = path.Value ?? "/api/orders";
+            }
+
+            return problem.ToJsonString();
+        }
+        catch (JsonException)
+        {
+            return payload;
+        }
     }
 
     private static byte[] ComputeFingerprint(string? ifMatch)

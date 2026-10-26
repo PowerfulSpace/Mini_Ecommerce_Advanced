@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using PS.MiniEcommerce.Infrastructure;
 using PS.MiniEcommerce.Infrastructure.Persistence;
@@ -263,6 +264,55 @@ public class CheckoutEndpointTests : IAsyncLifetime
         var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
         Assert.NotNull(error);
         Assert.Equal("cart_empty", error.Code);
+    }
+
+    [Fact]
+    public async Task PostOrders_WhenReplayingSavedError_ReturnsProblemDetailsWithInstance()
+    {
+        var etag = await GetAliceCartETagAsync();
+        const string idempotencyKey = "checkout-d4-instance-1";
+
+        var first = await _client.SendAsync(CreateCheckoutRequest(idempotencyKey, etag));
+
+        Assert.Equal(HttpStatusCode.Conflict, first.StatusCode);
+        Assert.Equal("application/problem+json", first.Content.Headers.ContentType?.MediaType);
+        var firstBody = await first.Content.ReadAsStringAsync();
+
+        var attempt = await GetCheckoutAttemptAsync(idempotencyKey);
+        Assert.NotNull(attempt);
+        Assert.Equal(CheckoutAttemptStatus.Completed, attempt.Status);
+        var savedPayload = attempt.ResponsePayload;
+        Assert.NotNull(savedPayload);
+        Assert.DoesNotContain("\"instance\"", savedPayload);
+
+        using var firstProblem = JsonDocument.Parse(firstBody);
+        using var savedProblem = JsonDocument.Parse(savedPayload!);
+        Assert.Equal("/api/orders", firstProblem.RootElement.GetProperty("instance").GetString());
+        Assert.Equal(
+            savedProblem.RootElement.GetProperty("type").GetString(),
+            firstProblem.RootElement.GetProperty("type").GetString());
+        Assert.Equal(
+            savedProblem.RootElement.GetProperty("title").GetString(),
+            firstProblem.RootElement.GetProperty("title").GetString());
+        Assert.Equal(
+            savedProblem.RootElement.GetProperty("status").GetInt32(),
+            firstProblem.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal(
+            savedProblem.RootElement.GetProperty("detail").GetString(),
+            firstProblem.RootElement.GetProperty("detail").GetString());
+        Assert.Equal(
+            savedProblem.RootElement.GetProperty("code").GetString(),
+            firstProblem.RootElement.GetProperty("code").GetString());
+
+        var second = await _client.SendAsync(CreateCheckoutRequest(idempotencyKey, etag));
+
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        Assert.Equal("application/problem+json", second.Content.Headers.ContentType?.MediaType);
+        var secondBody = await second.Content.ReadAsStringAsync();
+        Assert.Equal(firstBody, secondBody);
+
+        using var secondProblem = JsonDocument.Parse(secondBody);
+        Assert.Equal("/api/orders", secondProblem.RootElement.GetProperty("instance").GetString());
     }
 
     [Fact]

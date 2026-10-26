@@ -49,6 +49,14 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
                 utcNow,
                 cancellationToken);
         }
+        catch (DomainConflictException exception) when (exception.Code == "checkout_retry")
+        {
+            return await HandleCheckoutRetryAsync(
+                checkoutAttemptId,
+                utcNow,
+                exception,
+                cancellationToken);
+        }
         catch (DomainException exception)
         {
             return await PersistErrorAsync(checkoutAttemptId, exception, utcNow, cancellationToken);
@@ -152,8 +160,9 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
 
                 if (error is null)
                 {
-                    throw new InvalidOperationException(
-                        "A stock or availability conflict could not be reproduced after the checkout transaction was rolled back.");
+                    throw new DomainConflictException(
+                        "The checkout state changed concurrently after rollback. Retry the same request with the same idempotency key.",
+                        "checkout_retry");
                 }
 
                 throw error;
@@ -250,6 +259,8 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
         IReadOnlyDictionary<Guid, int> requestedQuantities,
         CancellationToken cancellationToken)
     {
+        // Always read in a fresh scope/context so the result reflects committed state,
+        // regardless of the caller's active or already rolled-back transaction.
         await using var scope = _serviceScopeFactory.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
@@ -305,6 +316,38 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
         }
 
         return null;
+    }
+
+    private async Task<CheckoutExecutionResult> HandleCheckoutRetryAsync(
+        Guid checkoutAttemptId,
+        DateTime utcNow,
+        DomainConflictException exception,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogWarning(
+            "Checkout attempt {CheckoutAttemptId} could not reproduce a stock or availability conflict after rollback; leaving it in progress for retry.",
+            checkoutAttemptId);
+
+        var expiredLease = utcNow.AddSeconds(-1);
+
+        await _dbContext.CheckoutAttempts
+            .Where(attempt =>
+                attempt.Id == checkoutAttemptId
+                && attempt.Status == CheckoutAttemptStatus.InProgress)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(attempt => attempt.LeaseExpiresAtUtc, expiredLease)
+                    .SetProperty(attempt => attempt.UpdatedAtUtc, utcNow),
+                cancellationToken);
+
+        var (statusCode, responsePayload) = MapToProblemDetails(exception);
+
+        return new CheckoutExecutionResult(
+            Success: false,
+            ResponseStatusCode: statusCode,
+            ResponsePayload: responsePayload,
+            OrderId: null,
+            NewCartRowVersion: null);
     }
 
     private async Task<CheckoutExecutionResult> PersistErrorAsync(
@@ -394,6 +437,13 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
                 exception.Code)),
 
             "idempotency_in_progress" => (503, BuildPayload(
+                "https://tools.ietf.org/html/rfc9110#section-15.6.4",
+                "Service unavailable.",
+                503,
+                exception.Message,
+                exception.Code)),
+
+            "checkout_retry" => (503, BuildPayload(
                 "https://tools.ietf.org/html/rfc9110#section-15.6.4",
                 "Service unavailable.",
                 503,

@@ -92,26 +92,30 @@ app.Run();
 
 static async Task WriteHealthResponse(HttpContext context, HealthReport report)
 {
-    context.Response.ContentType = "application/json";
-
     if (report.Status == HealthStatus.Healthy)
     {
+        context.Response.ContentType = "application/json";
         await context.Response.WriteAsync("{\"status\":\"Healthy\"}");
         return;
     }
 
     context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
 
-    var problem = new
+    var problem = new ProblemDetails
     {
-        type = "https://tools.ietf.org/html/rfc9110#section-15.6.4",
-        title = "Service unavailable.",
-        status = StatusCodes.Status503ServiceUnavailable,
-        detail = "The database is not reachable.",
-        code = "health_unavailable"
+        Type = "https://tools.ietf.org/html/rfc9110#section-15.6.4",
+        Title = "Service unavailable.",
+        Status = StatusCodes.Status503ServiceUnavailable,
+        Detail = "The database is not reachable.",
+        Instance = context.Request.Path,
+        Extensions = { ["code"] = "health_unavailable" }
     };
 
-    await context.Response.WriteAsJsonAsync(problem);
+    await context.Response.WriteAsJsonAsync(
+        problem,
+        options: null,
+        contentType: "application/problem+json",
+        cancellationToken: context.RequestAborted);
 }
 
 public partial class Program { }

@@ -496,9 +496,13 @@ If-Match: "<cart ETag>"
   "title": "Cart version conflict",
   "status": 412,
   "detail": "The cart changed after it was retrieved. Fetch the latest cart and retry with an updated request.",
+  "instance": "/api/orders",
   "code": "cart_version_conflict"
 }
 ```
+
+Поле `instance` присутствует во всех ответах `ProblemDetails`, включая
+воспроизводимые сохранённые ошибки оформления заказа и `GET /health` при `503`.
 
 Пример URI `type` является иллюстративным. Реализация должна использовать
 согласованное соглашение о типах проблем.
@@ -523,6 +527,7 @@ If-Match: "<cart ETag>"
 | `idempotency_key_reused` | 409 | Тот же ключ был использован с другим запросом |
 | `order_already_cancelled` | 409 | Заказ уже отменён |
 | `idempotency_in_progress` | 503 | Совпадающая попытка оформления заказа всё ещё разрешается |
+| `checkout_retry` | 503 | Временная ошибка: состояние изменилось конкурентно; попытка остаётся `InProgress`, клиент повторяет тот же запрос с тем же ключом идемпотентности |
 | `health_unavailable` | 503 | База данных недоступна |
 
 Реализация может добавлять коды при необходимости, но существующие коды и их
