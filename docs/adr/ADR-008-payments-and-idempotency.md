@@ -27,6 +27,7 @@
 - `Id`;
 - `OrderId` (unique);
 - `Amount` (`Money`);
+- `RefundedAmount` (`Money`, накопительно);
 - `Status` (`Pending`, `Confirmed`, `Failed`, `Refunded`);
 - `Provider` (`mock`);
 - `ProviderPaymentId` (`mock`);
@@ -43,9 +44,14 @@
 - `Pending` — платёж создан, но не подтверждён;
 - `Confirmed` — платёж подтверждён, заказ переходит в `Paid`;
 - `Failed` — mock-провайдер вернул неудачу;
-- `Refunded` — выполнён refund.
+- `Refunded` — выполнен полный refund (`RefundedAmount == Amount`).
 
-`Failed` и `Refunded` терминальны в MVP+.
+`Refunded` терминален.
+
+`Failed` не терминален для retry: повторный `POST /api/payments/{id}/confirm` с
+тем же `Idempotency-Key` и fingerprint → `Failed → Pending → Confirmed` (mock).
+С новым `Idempotency-Key` — новая попытка на том же `Payment` (не создаёт второй
+`Payment`). `Payment.Status = Refunded` — терминален (retry не допускается).
 
 ### Создание платежа
 
@@ -79,17 +85,20 @@ Checkout создаёт `Payment` в `Pending` в той же транзакци
 
 Если платёж уже `Confirmed`, новый запрос без сохранённого результата
 идемпотентности возвращает `409 Conflict` с кодом `payment_already_confirmed`.
-Если платёж `Failed` — `409 Conflict` с кодом `payment_failed`. Если заказ уже
-не в `Created` — `409 Conflict` с кодом `invalid_order_transition`. Если платёж
-не найден или принадлежит другому пользователю — `404 Not Found` с кодом
-`payment_not_found`.
+Если платёж `Failed`, confirm с тем же ключом и fingerprint выполняет retry
+`Failed → Pending → Confirmed`; с новым ключом создаётся новая попытка на том же
+`Payment`. Если mock снова возвращает неудачу, возвращается `409 Conflict` с
+кодом `payment_failed`. Если заказ уже не в `Created` — `409 Conflict` с кодом
+`invalid_order_transition`. Если платёж не найден или принадлежит другому
+пользователю — `404 Not Found` с кодом `payment_not_found`.
 
 ### Refund
 
 `POST /api/payments/{id}/refund`:
 
 - admin, только Development;
-- mock: `Confirmed → Refunded`;
+- mock: `Confirmed → Refunded` только при полном возврате; частичный возврат
+  оставляет `Confirmed`;
 - сумма может быть полной или частичной;
 - используется при `Paid → Cancelled` и `Delivered → Returned`;
 - не является отдельным «только денежным» refund без перехода заказа;
@@ -98,23 +107,31 @@ Checkout создаёт `Payment` в `Pending` в той же транзакци
 
 Refund выполняется в той же транзакции, что и отмена/возврат:
 
-- `Payment.Confirmed → Refunded`;
+- `Payment.RefundedAmount += amount`; `Payment.Status = Refunded` только при
+  полном возврате;
 - `Available += quantity` (ADR-005);
 - `Order → Cancelled` (полная отмена) или `Order → Returned` (ADR-004).
 
 Если refund падает, вся транзакция откатывается: платёж, заказ, отмены и запас
 не остаются частично изменёнными.
 
-Сумма refund не может превышать `Payment.Amount` и должна соответствовать
-отменяемому/возвращаемому количеству. При полной отмене или полном возврате
-refund полный; при частичной отмене — пропорционально снимкам
-`OrderItem.UnitPrice`.
+Сумма refund не может превышать `Payment.Amount - Payment.RefundedAmount` и
+должна соответствовать отменяемому/возвращаемому количеству. При полной отмене
+или полном возврате refund равен оставшейся сумме; при частичной отмене —
+пропорционально снимкам `OrderItem.UnitPrice`.
 
-В MVP+ `Payment` допускает один refund. После перехода в `Refunded` повторный
-refund возвращает `409 Conflict` с кодом `refund_not_allowed`. Частичный refund
-также переводит платёж в `Refunded`; отдельного статуса `PartiallyRefunded` нет.
-Если потребуются несколько частичных refund, потребуется отдельная модель
-refund-записей или дополнительный статус — это расширение MVP+.
+Refund поддерживает несколько частичных возвратов. `Payment` имеет
+`RefundedAmount` (`Money`, накопительно) и `Status = Refunded` только при
+`RefundedAmount == Amount` (полный возврат). Частичные refund — отдельная таблица
+`Refund`: `Id`, `PaymentId`, `Amount` (`Money`), `RefundedAtUtc`, `Reason?`.
+Каждый refund, включая полный, создаёт запись `Refund`.
+`Payment.RefundedAmount = SUM(Refund.Amount)`. Инвариант:
+`RefundedAmount <= Amount`.
+
+Повторный refund после полного возврата (`Status = Refunded`) возвращает
+`409 Conflict` с кодом `refund_not_allowed`. Частичные refund не меняют статус
+на `Refunded`; отдельного статуса `PartiallyRefunded` нет. `Payment.RefundedAtUtc`
+устанавливается при полном возврате.
 
 ### IPaymentProvider
 
@@ -157,15 +174,18 @@ Fingerprint не включает `Idempotency-Key`: ключ уже являе�
 
 Повторное использование ключа с другим fingerprint возвращает `409 Conflict` с
 кодом `idempotency_key_reused`. Завершённая попытка воспроизводит сохранённый
-статус и тело. `InProgress` использует bounded wait и lease; фоновый cleanup не
-вводится. Восстановление выполняется по требованию, как в ADR-002.
+статус и тело, кроме окончательного `Failed`: для `Failed` повтор с тем же
+ключом/fingerprint выполняет retry по разделу «Статусы». `InProgress` использует
+bounded wait и lease; фоновый cleanup не вводится. Восстановление выполняется по
+требованию, как в ADR-002.
 
 ### Транзакционные границы
 
 - **Confirm:** `Payment.Pending → Confirmed`, `Order.Created → Paid`,
   `Reserved` consumed — одна транзакция.
-- **Refund при cancel/return:** `Payment.Confirmed → Refunded`,
-  `Available += quantity`, `Order → Cancelled/Returned` — одна транзакция.
+- **Refund при cancel/return:** `Payment.RefundedAmount += amount`,
+  `Payment.Status = Refunded` только при полном возврате, `Available += quantity`,
+  `Order → Cancelled/Returned` — одна транзакция.
 - Если операция падает, все изменения откатываются.
 - События `PaymentConfirmed`, `PaymentRefunded`, `OrderPaid`,
   `OrderCancelled`, `OrderReturned` публикуются после commit по ADR-007.
@@ -175,7 +195,8 @@ Fingerprint не включает `Idempotency-Key`: ключ уже являе�
 - Не вводим `PendingPayment` в `OrderStatus`.
 - Не используем Stripe, реальные вебхуки и reconciliation.
 - Не обобщаем `CheckoutAttempt`.
-- Не добавляем несколько refund на один `Payment`.
+- Не добавляем отдельный статус `PartiallyRefunded`; частичные refund
+  учитываются в `Refund`.
 - Не добавляем реального провайдера платежей.
 - Не делаем частичные платежи: `Payment.Amount` равен сумме заказа.
 
@@ -191,9 +212,10 @@ Fingerprint не включает `Idempotency-Key`: ключ уже являе�
 
 ### Компромиссы
 
-- Нужны `Payment`, `PaymentAttempt`, `Order.PaymentId` и миграции.
-- Один refund на платёж ограничивает несколько частичных refund.
-- `Failed` терминален: повторная оплата в MVP+ не описана.
+- Нужны `Payment`, `PaymentAttempt`, `Refund`, `Order.PaymentId` и миграции.
+- Несколько частичных refund требуют таблицы `Refund` и накопления
+  `RefundedAmount`.
+- `Failed` не терминален: retry выполняется на том же `Payment`.
 - Mock-провайдер не проверяет реальные платежи.
 - Нет reconciliation и вебхуков.
 
@@ -207,6 +229,8 @@ Fingerprint не включает `Idempotency-Key`: ключ уже являе�
 ## Требования к реализации
 
 - Добавить `Payment` с полями и статусами из этого ADR; `OrderId` unique.
+- Добавить `Refund` (`Id`, `PaymentId`, `Amount`, `RefundedAtUtc`, `Reason?`) и
+  накопительный `Payment.RefundedAmount`.
 - Добавить nullable `Order.PaymentId`; платёж создаётся в checkout в `Pending`.
 - Создавать `Payment` и заказ в одной транзакции; возвращать `paymentId` в
   `201 Created`.
@@ -219,8 +243,10 @@ Fingerprint не включает `Idempotency-Key`: ключ уже являе�
   идемпотентности в одной транзакции.
 - Реализовать `POST /api/payments/{id}/refund` для admin в Development; refund,
   изменение запаса и переход заказа — в одной транзакции.
-- Не допускать refund больше `Payment.Amount`, повторный refund и refund без
-  допустимого перехода заказа.
+- Не допускать refund больше `Payment.Amount`, refund после полного возврата и
+  refund без допустимого перехода заказа.
+- Поддерживать несколько частичных refund; `Payment.Status = Refunded`
+  устанавливать только при `RefundedAmount == Amount`.
 - Публиковать `PaymentConfirmed` и `PaymentRefunded` после commit.
 - Добавить тесты на:
   - создание платежа при checkout;
@@ -230,6 +256,8 @@ Fingerprint не включает `Idempotency-Key`: ключ уже являе�
   - идемпотентность confirm и `idempotency_key_reused`;
   - bounded wait и lease;
   - refund при отмене и возврате;
+  - несколько частичных refund и `Refunded` только при полном возврате;
   - откат при ошибке refund;
-  - запрет повторного refund и refund больше суммы;
+  - запрет refund после полного возврата и refund больше суммы;
+  - retry `Failed → Pending → Confirmed`;
   - отсутствие `PendingPayment` в `OrderStatus`.

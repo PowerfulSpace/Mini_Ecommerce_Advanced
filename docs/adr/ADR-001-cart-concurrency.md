@@ -326,3 +326,9 @@ MVP выполняет эти транзакции на уровне SQL Server 
 - `ETag`/`If-Match`.
 - `UPDLOCK` и порядок блокировок.
 - Резервирование `Idempotency-Key`.
+
+### 2026-10-26 — M5 (выбор позиций)
+
+`PUT /api/cart/selection` — мутация корзины (изменение `IsSelected`), требует
+`If-Match` и меняет `rowversion`. Часть состояния корзины наравне с позициями.
+Ссылка: [ADR-006](ADR-006-partial-checkout-and-cancellation.md).
