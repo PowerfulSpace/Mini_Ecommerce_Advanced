@@ -92,7 +92,15 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
             .ToList();
 
         var products = await _dbContext.Products
+            .AsNoTracking()
             .Where(product => productIds.Contains(product.Id))
+            .Select(product => new
+            {
+                product.Id,
+                product.Name,
+                product.IsActive,
+                product.StockQuantity
+            })
             .ToListAsync(cancellationToken);
 
         var productsById = products.ToDictionary(product => product.Id);
@@ -136,10 +144,24 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
             }
         }
 
+        var productSnapshots = await _dbContext.Products
+            .AsNoTracking()
+            .Where(product => productIds.Contains(product.Id))
+            .OrderBy(product => product.Id)
+            .Select(product => new
+            {
+                product.Id,
+                product.Name,
+                product.Price
+            })
+            .ToListAsync(cancellationToken);
+
+        var productSnapshotsById = productSnapshots.ToDictionary(product => product.Id);
+
         var orderItems = cart.Items
             .Select(item =>
             {
-                var product = productsById[item.ProductId];
+                var product = productSnapshotsById[item.ProductId];
                 return new OrderItemData(item.ProductId, product.Name, product.Price, item.Quantity);
             })
             .ToList();

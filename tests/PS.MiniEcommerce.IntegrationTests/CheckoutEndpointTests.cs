@@ -52,6 +52,8 @@ public class CheckoutEndpointTests : IAsyncLifetime
         Assert.Equal(19.99m, order.TotalAmount);
         var item = Assert.Single(order.Items);
         Assert.Equal(productId, item.ProductId);
+        Assert.Equal(WirelessMouse, item.ProductName);
+        Assert.Equal(19.99m, item.UnitPrice);
 
         Assert.Equal(99, await GetStockQuantityAsync(WirelessMouse));
         Assert.Equal(0, await GetAliceCartItemCountAsync());
@@ -61,6 +63,53 @@ public class CheckoutEndpointTests : IAsyncLifetime
         Assert.Equal(CheckoutAttemptStatus.Completed, attempt.Status);
         Assert.Equal(201, attempt.ResponseStatusCode);
         Assert.NotNull(attempt.OrderId);
+    }
+
+    [Fact]
+    public async Task PostOrders_WhenProductChangesAfterCartReadButBeforeStockDeduction_SnapshotsLockedValues()
+    {
+        var products = await GetActiveProductsAsync(count: 3);
+        var first = products[0];
+        var blocked = products[1];
+        var target = products[2];
+        var updatedName = target.Name + " (updated)";
+        var updatedPrice = target.Price + 10m;
+
+        var etag = await AddItemToAliceCartAsync(first.Id, 1);
+        etag = await AddItemToAliceCartAsync(blocked.Id, 1);
+        etag = await AddItemToAliceCartAsync(target.Id, 1);
+
+        await using var blockerContext = CreateContext();
+        await using var blockerTransaction = await blockerContext.Database.BeginTransactionAsync();
+
+        await blockerContext.Products
+            .FromSqlInterpolated($"SELECT * FROM Products WITH (UPDLOCK, ROWLOCK) WHERE Id = {blocked.Id}")
+            .AsNoTracking()
+            .ToListAsync();
+
+        var checkout = _client.SendAsync(
+            CreateCheckoutRequest("checkout-snapshot-race-1", etag));
+
+        await WaitForStockQuantityWithNoLockAsync(first.Id, first.StockQuantity - 1);
+
+        await blockerContext.Products
+            .Where(product => product.Id == target.Id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(product => product.Name, updatedName)
+                .SetProperty(product => product.Price, updatedPrice));
+
+        await blockerTransaction.CommitAsync();
+
+        var response = await checkout.WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var order = await response.Content.ReadFromJsonAsync<OrderResponse>();
+        Assert.NotNull(order);
+
+        var item = Assert.Single(order.Items, orderItem => orderItem.ProductId == target.Id);
+        Assert.Equal(updatedName, item.ProductName);
+        Assert.Equal(updatedPrice, item.UnitPrice);
+        Assert.Equal(updatedPrice * item.Quantity, item.LineTotal);
     }
 
     [Fact]
@@ -270,6 +319,50 @@ public class CheckoutEndpointTests : IAsyncLifetime
             .FirstAsync();
     }
 
+    private async Task<List<ProductSnapshot>> GetActiveProductsAsync(int count)
+    {
+        await using var context = CreateContext();
+        var products = await context.Products
+            .AsNoTracking()
+            .Where(product => product.IsActive && product.StockQuantity >= 1)
+            .Select(product => new ProductSnapshot(
+                product.Id,
+                product.Name,
+                product.Price,
+                product.StockQuantity))
+            .ToListAsync();
+
+        return products
+            .OrderBy(product => product.Id)
+            .Take(count)
+            .ToList();
+    }
+
+    private async Task WaitForStockQuantityWithNoLockAsync(Guid productId, int expectedStockQuantity)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+
+        while (DateTime.UtcNow < deadline)
+        {
+            await using var context = CreateContext();
+            var stockQuantity = await context.Products
+                .FromSqlInterpolated($"SELECT * FROM Products WITH (NOLOCK) WHERE Id = {productId}")
+                .AsNoTracking()
+                .Select(product => product.StockQuantity)
+                .SingleAsync();
+
+            if (stockQuantity == expectedStockQuantity)
+            {
+                return;
+            }
+
+            await Task.Delay(25);
+        }
+
+        throw new TimeoutException(
+            $"Product {productId} did not reach stock quantity {expectedStockQuantity} before the timeout.");
+    }
+
     private async Task<int> GetStockQuantityAsync(string name)
     {
         await using var context = CreateContext();
@@ -323,6 +416,8 @@ public class CheckoutEndpointTests : IAsyncLifetime
         new(new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlServer(_fixture.ConnectionString)
             .Options);
+
+    private sealed record ProductSnapshot(Guid Id, string Name, decimal Price, int StockQuantity);
 
     private sealed record OrderResponse(Guid Id, string Status, DateTime CreatedAtUtc, decimal TotalAmount, List<OrderItemResponse> Items);
 
