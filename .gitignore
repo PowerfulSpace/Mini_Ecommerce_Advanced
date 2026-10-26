@@ -426,3 +426,60 @@ FodyWeavers.xsd
 
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
+
+
+
+
+
+
+
+
+
+# Node / Vue
+node_modules/
+dist/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Бэкенд — секреты
+**/appsettings.Production.json
+
+# Локальная конфигурация разработки и тестов — не коммитить
+**/appsettings.Development.json
+**/appsettings.Test.json
+
+# Батч 49 (О10): локальные HTTPS-сертификаты — не коммитить
+# (*.pfx уже игнорируется в разделе «Others» выше)
+*.pem
+*.key
+*.crt
+*.p12
+
+# Но: keep example / placeholder (если понадобится)
+!*.example.pem
+!*.example.key
+
+# Vite cache
+.vite/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional caches
+.npm
+.eslintcache
+.stylelintcache
+
+# Test coverage results (dotnet test --collect)
+TestResults/
+coverage/
+
+# Временные отчёты аудита
+.audit-tmp/
+
+# Local worktrees (.kilo)
+.kilo/

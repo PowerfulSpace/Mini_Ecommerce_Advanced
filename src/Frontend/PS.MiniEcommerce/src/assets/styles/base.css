@@ -1,0 +1,53 @@
+/* ============== Base Reset ============== */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* ============== Root Variables ============== */
+:root {
+  /* Основные цвета */
+  --color-primary: #18a058; /* основной акцент Naive UI */
+  --color-text: #333333;
+  --color-text-soft: #666666;
+  --color-border: #dddddd;
+  --color-background: #ffffff;
+
+  /* Удобные размеры */
+  --radius: 6px;
+  --gap: 16px;
+  --gap-sm: 8px;
+  --gap-lg: 24px;
+}
+
+/* Тёмная тема */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-text: #e5e5e5;
+    --color-text-soft: #b3b3b3;
+    --color-border: #444444;
+    --color-background: #1a1a1a;
+  }
+}
+
+/* ============== Global Base Styles ============== */
+html {
+  font-size: 16px;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family:
+    Inter,
+    system-ui,
+    -apple-system,
+    sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--color-text);
+  background: var(--color-background);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

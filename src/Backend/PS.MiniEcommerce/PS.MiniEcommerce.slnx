@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/tests/">
+    <Project Path="../../../tests/PS.MiniEcommerce.IntegrationTests/PS.MiniEcommerce.IntegrationTests.csproj" />
+    <Project Path="../../../tests/PS.MiniEcommerce.UnitTests/PS.MiniEcommerce.UnitTests.csproj" />
+  </Folder>
+  <Project Path="PS.MiniEcommerce.API/PS.MiniEcommerce.API.csproj" />
+  <Project Path="PS.MiniEcommerce.Application/PS.MiniEcommerce.Application.csproj" />
+  <Project Path="PS.MiniEcommerce.Domain/PS.MiniEcommerce.Domain.csproj" />
+  <Project Path="PS.MiniEcommerce.Infrastructure/PS.MiniEcommerce.Infrastructure.csproj" />
+</Solution>
