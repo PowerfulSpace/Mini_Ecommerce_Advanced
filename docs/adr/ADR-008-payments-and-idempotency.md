@@ -94,23 +94,24 @@ Checkout создаёт `Payment` в `Pending` в той же транзакци
 
 ### Refund
 
-`POST /api/payments/{id}/refund`:
+`POST /api/payments/{id}/refund` — admin endpoint, доступный только в
+Development. Это ручной возврат: он изменяет только `Payment` и создаёт
+`Refund`, но не меняет заказ и запас.
 
-- admin, только Development;
 - mock: `Confirmed → Refunded` только при полном возврате; частичный возврат
   оставляет `Confirmed`;
-- сумма может быть полной или частичной;
-- используется при `Paid → Cancelled` и `Delivered → Returned`;
-- не является отдельным «только денежным» refund без перехода заказа;
-- пользовательская отмена `Paid → Cancelled` использует тот же refund-сервис;
-  admin endpoint — отдельная Development-обёртка.
+- сумма может быть полной или частичной.
 
-Refund выполняется в той же транзакции, что и отмена/возврат:
+Автоматический refund при `Paid → Cancelled` и `Delivered → Returned`
+выполняется внутренним refund-сервисом, не через endpoint, в одной транзакции
+с изменением заказа и запаса:
 
 - `Payment.RefundedAmount += amount`; `Payment.Status = Refunded` только при
   полном возврате;
 - `Available += quantity` (ADR-005);
 - `Order → Cancelled` (полная отмена) или `Order → Returned` (ADR-004).
+
+См. [payments.md](../architecture/payments.md), §5 «Возврат».
 
 Если refund падает, вся транзакция откатывается: платёж, заказ, отмены и запас
 не остаются частично изменёнными.
@@ -146,9 +147,9 @@ RefundAsync(paymentId, amount)
 В MVP+ используется mock-реализация. Реальный провайдер, Stripe, вебхуки и
 reconciliation не вводятся.
 
-### Идемпотентность confirm
+### Идемпотентность confirm и refund
 
-Для confirm используется отдельная таблица `PaymentAttempt`, не
+Для confirm и refund используется отдельная таблица `PaymentAttempt`, не
 `CheckoutAttempt`:
 
 - `Id`;
@@ -163,21 +164,29 @@ reconciliation не вводятся.
 - `CreatedAtUtc`;
 - `UpdatedAtUtc`.
 
-Уникальность: `(UserId, IdempotencyKey)`. `PaymentAttempt` относится к
-Infrastructure, как `CheckoutAttempt`; `CheckoutAttempt` не обобщается.
+Уникальность: `(UserId, IdempotencyKey)`. `PaymentAttempt` покрывает и confirm, и
+refund; относится к Infrastructure, как `CheckoutAttempt`; `CheckoutAttempt` не
+обобщается.
 
 Fingerprint не включает `Idempotency-Key`: ключ уже является заголовком и частью
-области уникальности. Fingerprint вычисляется как
-`SHA-256("POST /api/payments/{id}/confirm")`; `id` платежа входит в путь запроса.
-Один и тот же ключ с другим путём даёт другой fingerprint и конфликт
-`idempotency_key_reused`.
+области уникальности.
 
-Повторное использование ключа с другим fingerprint возвращает `409 Conflict` с
-кодом `idempotency_key_reused`. Завершённая попытка воспроизводит сохранённый
-статус и тело, кроме окончательного `Failed`: для `Failed` повтор с тем же
-ключом/fingerprint выполняет retry по разделу «Статусы». `InProgress` использует
-bounded wait и lease; фоновый cleanup не вводится. Восстановление выполняется по
-требованию, как в ADR-002.
+- Для confirm:
+  `SHA-256("POST /api/payments/{id}/confirm\n{id}")` — метод, путь и
+  `paymentId`.
+- Для refund:
+  `SHA-256("POST /api/payments/{id}/refund\n{id}\n{amount}\n{reason}")` — метод,
+  путь, `paymentId` и нормализованные `amount` и `reason`. Тело refund влияет на
+  результат, поэтому повтор с другой суммой не должен воспроизводить старый
+  ответ.
+
+Один и тот же ключ с другим fingerprint возвращает `409 Conflict` с кодом
+`idempotency_key_reused`. Завершённая попытка воспроизводит сохранённый статус и
+тело. Исключение — окончательный `Failed` для confirm: повтор с тем же
+ключом/fingerprint выполняет retry по разделу «Статусы». Для refund `Failed` не
+применяется: в mock такого состояния нет, а `Refunded` терминален. `InProgress`
+использует bounded wait и lease; фоновый cleanup не вводится. Восстановление
+выполняется по требованию, как в ADR-002.
 
 ### Транзакционные границы
 
@@ -237,14 +246,17 @@ bounded wait и lease; фоновый cleanup не вводится. Восст�
 - Реализовать `IPaymentProvider` и mock-реализацию.
 - Реализовать `POST /api/payments/{id}/confirm` только для владельца и с
   `Idempotency-Key`.
-- Реализовать `PaymentAttempt` отдельно от `CheckoutAttempt`, с уникальностью
-  `(UserId, IdempotencyKey)`, fingerprint, lease и bounded wait.
+- Реализовать `PaymentAttempt` для confirm и refund отдельно от
+  `CheckoutAttempt`, с уникальностью `(UserId, IdempotencyKey)`, fingerprint,
+  lease и bounded wait.
 - Выполнять confirm, consume `Reserved`, `MarkPaid()` и завершение
   идемпотентности в одной транзакции.
-- Реализовать `POST /api/payments/{id}/refund` для admin в Development; refund,
-  изменение запаса и переход заказа — в одной транзакции.
+- Реализовать `POST /api/payments/{id}/refund` для admin в Development как
+  ручной возврат только `Payment`/`Refund`.
+- Выполнять автоматический refund при cancel/return внутренним сервисом в одной
+  транзакции с изменением заказа и запаса.
 - Не допускать refund больше `Payment.Amount`, refund после полного возврата и
-  refund без допустимого перехода заказа.
+  refund при недопустимом статусе платежа.
 - Поддерживать несколько частичных refund; `Payment.Status = Refunded`
   устанавливать только при `RefundedAmount == Amount`.
 - Публиковать `PaymentConfirmed` и `PaymentRefunded` после commit.
@@ -254,6 +266,7 @@ bounded wait и lease; фоновый cleanup не вводится. Восст�
   - повторный confirm и `payment_already_confirmed`;
   - `payment_failed`;
   - идемпотентность confirm и `idempotency_key_reused`;
+  - идемпотентность refund, включая fingerprint с `amount`/`reason`;
   - bounded wait и lease;
   - refund при отмене и возврате;
   - несколько частичных refund и `Refunded` только при полном возврате;

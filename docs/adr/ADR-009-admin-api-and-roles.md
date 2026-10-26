@@ -28,7 +28,7 @@ admin.
 - Механизм доступен только в Development.
 - В Production admin-аутентификация и admin endpoints не регистрируются.
 - Запрос от `alice` или `bob` к admin endpoint возвращает `403 Forbidden` с
-  кодом `admin_forbidden`.
+  кодом `forbidden`.
 - Неизвестный `X-Test-User` не аутентифицирует запрос.
 - Seed admin-пользователя должен быть идемпотентным и не создавать дублей.
 
@@ -63,13 +63,13 @@ false`.
 
 - `Available >= 0`.
 - `Reserved` не изменяется.
-- Уменьшение `Available` ниже нуля возвращает `409 Conflict` с кодом
-  `insufficient_reserved`.
+- Значение `available < 0` отклоняется с `400 Bad Request` и кодом
+  `validation_error`.
 - Операция должна быть атомарной и не терять конкурентные изменения
   `Available`.
 - Для optimistic concurrency используется `Product.RowVersion`; при конфликте
-  допускается ограниченное число повторных попыток. Точный код ответа при
-  исчерпании повторов определяется в `api.md`.
+  допускается ограниченное число повторных попыток. При исчерпании повторов
+  возвращается `409 Conflict` с кодом `admin_stock_conflict`.
 - Публикуется событие `StockAdjusted`.
 
 ### Ship
@@ -78,7 +78,7 @@ false`.
 (ADR-004).
 
 - Если заказ не в `Paid`, возвращается `409 Conflict` с кодом
-  `order_already_shipped`.
+  `invalid_order_transition`.
 - Публикуется событие `OrderShipped`.
 
 ### Deliver
@@ -106,6 +106,12 @@ false`.
 - Если refund невозможен, возвращается `409 Conflict` с кодом
   `refund_not_allowed`.
 - Публикуются события `OrderReturned` и `PaymentRefunded`.
+
+### Отмена заказа
+
+`POST /api/orders/{id}/cancel` — пользовательская операция, не admin endpoint.
+Повторная отмена уже отменённого заказа возвращает `409 Conflict` с кодом
+`order_already_cancelled` (ADR-006).
 
 ### Аудит и события
 
@@ -147,7 +153,7 @@ false`.
   seed должен быть идемпотентным.
 - Зарегистрировать `X-Test-User` с `admin` только в Development.
 - Не регистрировать admin endpoints в Production.
-- Проверять роль admin и возвращать `admin_forbidden` для не-admin.
+- Проверять роль admin и возвращать `forbidden` для не-admin.
 - Реализовать deactivate, stock, ship, deliver, return с указанными
   guard'ами и событиями.
 - Для admin stock использовать абсолютное `Available`, не трогать `Reserved`,

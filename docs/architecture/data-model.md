@@ -416,7 +416,7 @@ SQL Server автоматически создаёт и обновляет зн�
 
 ### 4.10 PaymentAttempt
 
-Представляет идемпотентную попытку подтверждения платежа.
+`PaymentAttempt` — идемпотентная попытка confirm и refund.
 
 | Свойство | Предлагаемый тип SQL | Требования |
 |---|---|---|
@@ -436,7 +436,9 @@ SQL Server автоматически создаёт и обновляет зн�
 
 - Уникальность `(UserId, IdempotencyKey)` предотвращает дублирующиеся попытки.
 - `PaymentAttempt` не обобщает и не заменяет `CheckoutAttempt`.
-- `RequestFingerprint` — SHA-256 fingerprint запроса подтверждения.
+- `RequestFingerprint` — SHA-256 fingerprint запроса. Для confirm: метод, путь
+  и `paymentId`; для refund: метод, путь, `paymentId`, `amount` и `reason`
+  (ADR-008).
 - `InProgress` использует lease и bounded wait; фоновый cleanup не вводится.
 - Завершённая попытка воспроизводит сохранённый результат; окончательный
   `Failed` допускает retry по правилам ADR-008.
