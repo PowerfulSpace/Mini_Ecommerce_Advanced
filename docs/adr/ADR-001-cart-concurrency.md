@@ -74,9 +74,6 @@ SQL Server `rowversion` корзины возвращается клиентам
 - `DELETE /api/cart/items/{productId}`
 - `POST /api/orders`
 
-Отмена заказа не использует `If-Match`; вместо этого она защищена условным
-переходом статуса заказа.
-
 Правила:
 
 - Отсутствие обязательного `If-Match` возвращает `428 Precondition Required` с
@@ -332,3 +329,9 @@ MVP выполняет эти транзакции на уровне SQL Server 
 `PUT /api/cart/selection` — мутация корзины (изменение `IsSelected`), требует
 `If-Match` и меняет `rowversion`. Часть состояния корзины наравне с позициями.
 Ссылка: [ADR-006](ADR-006-partial-checkout-and-cancellation.md).
+
+### 2026-10-27 — отмена заказа
+
+Отмена заказа использует `If-Match` с версией заказа (`Order.RowVersion`), см.
+[ADR-006](ADR-006-partial-checkout-and-cancellation.md). Это не `If-Match`
+корзины — отдельный ресурс, отдельная версия.

@@ -529,10 +529,13 @@ MVP+ не включает:
 - `X-Test-User` — учебный Development-механизм; реальная аутентификация
   JWT/OAuth не реализована.
 - Admin endpoints доступны только в Development; admin UI отсутствует.
-- Платежи mock: нет Stripe, реальных вебхуков и reconciliation.
-- `Payment.Failed` терминален; retry и повторная оплата не реализованы.
-- Один refund на `Payment`; несколько частичных refund после нескольких
-  частичных отмен не поддерживаются.
+- Платежи — mock, dev-only; нет Stripe, реальных вебхуков и reconciliation.
+  См. [ADR-008](adr/ADR-008-payments-and-idempotency.md).
+- `Payment.Failed` не терминален: retry переводит
+  `Failed → Pending → Confirmed`. См.
+  [ADR-008](adr/ADR-008-payments-and-idempotency.md).
+- Refund поддерживается, включая несколько частичных refund через таблицу
+  `Refund`. См. [ADR-008](adr/ADR-008-payments-and-idempotency.md).
 - Аудит работает at-most-once: при сбое handler'а audit-запись теряется; outbox
   и retry отсутствуют.
 - TTL, cleanup и фоновое освобождение резервов отсутствуют; `Created` может
