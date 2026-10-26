@@ -536,3 +536,7 @@ Mini E-commerce.
 - `adr/ADR-001-cart-concurrency.md`
 - `adr/ADR-002-checkout-idempotency.md`
 - `../AGENTS.md`
+
+## 19. Текущее состояние
+
+MVP+ — этапы 1–11 завершены; текущие работы ведутся в рамках MVP+ и не отражены в этой дорожной карте как отдельные этапы.
