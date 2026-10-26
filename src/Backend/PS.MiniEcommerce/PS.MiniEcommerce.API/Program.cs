@@ -25,6 +25,7 @@ builder.Services.AddControllers();
 builder.Services.Configure<ApiBehaviorOptions>(options =>
 {
     options.InvalidModelStateResponseFactory = InvalidModelStateProblemDetails.Create;
+    options.SuppressMapClientErrors = true;
 });
 
 builder.Services.AddHealthChecks()
@@ -81,6 +82,32 @@ app.UseCors("Frontend");
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+app.UseStatusCodePages(async statusCodeContext =>
+{
+    var context = statusCodeContext.HttpContext;
+
+    if (context.Response.StatusCode != StatusCodes.Status415UnsupportedMediaType)
+    {
+        return;
+    }
+
+    var problem = new ProblemDetails
+    {
+        Type = "https://tools.ietf.org/html/rfc9110#section-15.5.16",
+        Title = "Unsupported media type.",
+        Status = StatusCodes.Status415UnsupportedMediaType,
+        Detail = "The request Content-Type is not supported. Use application/json.",
+        Instance = context.Request.Path,
+        Extensions = { ["code"] = "unsupported_media_type" }
+    };
+
+    await context.Response.WriteAsJsonAsync(
+        problem,
+        options: null,
+        contentType: "application/problem+json",
+        cancellationToken: context.RequestAborted);
+});
 
 app.MapControllers();
 app.MapHealthChecks("/health", new HealthCheckOptions

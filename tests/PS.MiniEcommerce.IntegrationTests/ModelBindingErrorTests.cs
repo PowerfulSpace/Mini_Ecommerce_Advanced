@@ -50,6 +50,30 @@ public class ModelBindingErrorTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PostCartItems_WithUnsupportedContentType_Returns415ProblemDetailsWithCode()
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/cart/items")
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "text/plain")
+        };
+        request.Headers.Add("X-Test-User", "alice");
+
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("https://tools.ietf.org/html/rfc9110#section-15.5.16", error.Type);
+        Assert.Equal("Unsupported media type.", error.Title);
+        Assert.Equal(415, error.Status);
+        Assert.Equal("The request Content-Type is not supported. Use application/json.", error.Detail);
+        Assert.Equal("/api/cart/items", error.Instance);
+        Assert.Equal("unsupported_media_type", error.Code);
+    }
+
+    [Fact]
     public async Task GetProducts_WithNonIntegerPage_Returns400ProblemDetailsWithValidationErrorCode()
     {
         var response = await _client.GetAsync("/api/products?page=abc");
@@ -63,5 +87,12 @@ public class ModelBindingErrorTests : IAsyncLifetime
         Assert.NotNull(error.Errors);
     }
 
-    private sealed record ErrorResponse(string Code, Dictionary<string, string[]>? Errors);
+    private sealed record ErrorResponse(
+        string Code,
+        Dictionary<string, string[]>? Errors,
+        string? Type,
+        string? Title,
+        int? Status,
+        string? Detail,
+        string? Instance);
 }

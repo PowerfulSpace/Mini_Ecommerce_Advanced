@@ -4,6 +4,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Infrastructure;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 using PS.MiniEcommerce.Infrastructure.Seed;
@@ -87,6 +89,57 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         var attempt = await GetCheckoutAttemptAsync("active-lease-1");
         Assert.NotNull(attempt);
         Assert.Equal(CheckoutAttemptStatus.InProgress, attempt.Status);
+    }
+
+    [Fact]
+    public async Task PostOrders_WhenCommitOutcomeIsUncertain_Returns503AndLeavesAttemptInProgress()
+    {
+        var productId = await GetActiveProductIdAsync(WirelessMouse);
+        var stockBefore = await GetStockQuantityAsync(WirelessMouse);
+        var etag = await AddItemToAliceCartAsync(productId, quantity: 1);
+
+        var interceptor = new FailOrderSaveInterceptor();
+        using var factory = new CustomWebApplicationFactory(
+            _fixture.ConnectionString,
+            saveChangesInterceptor: interceptor);
+        using var client = factory.CreateClient();
+
+        const string idempotencyKey = "uncertain-commit-1";
+
+        var first = await client.SendAsync(CreateCheckoutRequest(idempotencyKey, etag));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, first.StatusCode);
+        var firstError = await first.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(firstError);
+        Assert.Equal("idempotency_in_progress", firstError.Code);
+
+        var attemptAfterFirst = await GetCheckoutAttemptAsync(idempotencyKey);
+        Assert.NotNull(attemptAfterFirst);
+        Assert.Equal(CheckoutAttemptStatus.InProgress, attemptAfterFirst.Status);
+        Assert.Null(attemptAfterFirst.ResponseStatusCode);
+        Assert.Null(attemptAfterFirst.ResponsePayload);
+        Assert.Null(attemptAfterFirst.OrderId);
+
+        Assert.Equal(0, await GetOrdersCountAsync());
+        Assert.Equal(stockBefore, await GetStockQuantityAsync(WirelessMouse));
+        Assert.Equal(1, await GetAliceCartItemCountAsync());
+
+        var second = await client.SendAsync(CreateCheckoutRequest(idempotencyKey, etag));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, second.StatusCode);
+        var secondError = await second.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(secondError);
+        Assert.Equal("idempotency_in_progress", secondError.Code);
+
+        var attemptAfterSecond = await GetCheckoutAttemptAsync(idempotencyKey);
+        Assert.NotNull(attemptAfterSecond);
+        Assert.Equal(CheckoutAttemptStatus.InProgress, attemptAfterSecond.Status);
+        Assert.Null(attemptAfterSecond.ResponseStatusCode);
+        Assert.Null(attemptAfterSecond.ResponsePayload);
+
+        Assert.Equal(0, await GetOrdersCountAsync());
+        Assert.Equal(stockBefore, await GetStockQuantityAsync(WirelessMouse));
+        Assert.Equal(1, await GetAliceCartItemCountAsync());
     }
 
     [Fact]
@@ -285,6 +338,26 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         new(new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlServer(_fixture.ConnectionString)
             .Options);
+
+    private sealed class FailOrderSaveInterceptor : SaveChangesInterceptor
+    {
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            var hasNewOrder = eventData.Context?.ChangeTracker
+                .Entries<Order>()
+                .Any(entry => entry.State == EntityState.Added) == true;
+
+            if (hasNewOrder)
+            {
+                throw new DbUpdateException("Simulated failure while saving the order.");
+            }
+
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
+        }
+    }
 
     private sealed record ErrorResponse(string Code);
 }

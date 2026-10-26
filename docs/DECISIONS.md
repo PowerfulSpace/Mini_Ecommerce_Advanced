@@ -143,9 +143,7 @@
   idempotency_in_progress без сохранения окончательной ошибки.
 - Неизвестные результаты фиксации (исключения из SaveChangesAsync или
   CommitAsync после начала транзакции) сопоставляются с 503
-  idempotency_in_progress через CheckoutCommitUncertainException. Этот путь не
-  покрыт автоматизированными тестами; режим отказа трудно надёжно смоделировать
-  без тестового дублёра. Ручная проверка отложена.
+  idempotency_in_progress через CheckoutCommitUncertainException.
 
 ## 2. Каталог и ценообразование
 
@@ -363,6 +361,10 @@ MVP не включает:
   списаний запаса под блокировкой строк товаров.
 - D1 устранён: проверка наличия/формата `If-Match` выполняется до резервирования
   `Idempotency-Key`; отсутствие `If-Match` возвращает `428` без расходования ключа.
+- D1, исторические данные: записи `CheckoutAttempts`, созданные до устранения D1
+  для запросов без `If-Match`, не удаляются и не мигрируются. Они не влияют на
+  новое поведение (новые запросы без `If-Match` не резервируют ключ), но занимают
+  место. Очистка не входит в MVP+.
 - D2 устранён: `insufficient_stock` и `product_unavailable` перечисляют все
   затронутые товары (`id` + `name`) в `detail`, прочитанные после отката/предварительной
   проверки. Приоритет — `product_unavailable`, если есть неактивный товар.
@@ -371,6 +373,11 @@ MVP не включает:
   `503 checkout_retry`; попытка остаётся `InProgress` с истёкшим lease, ответ не
   сохраняется в `ResponsePayload`, а повтор с тем же ключом и fingerprint снова
   выполняет checkout.
+- D2, bounded wait для `checkout_retry`: повтор с тем же ключом после `503
+  checkout_retry` проходит через существующий bounded wait (3 секунды, см. §10)
+  перед захватом истёкшего lease, даже если lease уже истёк. Это осознанно:
+  сохраняется grace period для действительно выполняющейся попытки. Оптимизация
+  (сразу захватывать истёкший lease без ожидания) — вне MVP+.
 - D4 устранён: сохранённый `ResponsePayload` остаётся чистым бизнес-результатом
   без `instance`; при формировании HTTP-ответа checkout-путь добавляет
   `instance = Request.Path`, если его нет, и возвращает ошибки с
@@ -378,21 +385,32 @@ MVP не включает:
 - D10 устранён: `GET /health` при `503` возвращает стандартный `ProblemDetails`
   с `instance = /health`, `code = health_unavailable` и
   `Content-Type: application/problem+json`.
+- D8 устранён: запрос с неподдерживаемым `Content-Type` к эндпоинту,
+  принимающему тело, возвращает `415` с `ProblemDetails`,
+  `instance = Request.Path`, `Content-Type: application/problem+json` и
+  `code = unsupported_media_type`. Обработка `400`/`validation_error` не
+  изменена.
+- D8, ограничение `SuppressMapClientErrors = true`: параметр отключает
+  автоматическое оборачивание «голых» client-error результатов MVC
+  (`return NotFound()`, `return BadRequest()` без `ProblemDetails`) в
+  `ProblemDetails`. Текущие контроллеры такие результаты не возвращают — все коды
+  обрабатываются `ExceptionHandler`/`InvalidModelStateResponseFactory`/
+  `UseStatusCodePages`. При добавлении новых контроллеров с «голыми» client-error
+  результатами нужно либо возвращать `ProblemDetails` явно, либо использовать
+  `IProblemDetailsService`.
+- Путь unknown-commit покрыт интеграционным тестом: сбой `SaveChangesAsync`
+  моделируется EF Core `SaveChangesInterceptor`; проверяются
+  `503 idempotency_in_progress`, попытка `InProgress` без `ResponsePayload` и
+  `OrderId`, отсутствие заказа и отсутствие второго заказа при повторе с тем же
+  ключом.
+- Unknown-commit, покрытие `CommitAsync`: покрыт путь сбоя `SaveChangesAsync`.
+  Сбой `CommitAsync` отдельным тестом не моделировался: оба пути используют один
+  `catch` и одинаковое преобразование в `CheckoutCommitUncertainException`.
+  Отдельный тест — вне MVP+.
 
 ## 13. Известные проблемы
 
-Следующее отклонение от контракта API известно. D8 сознательно принято и
-отложено за пределы MVP. Оно зафиксировано, чтобы frontend мог полагаться на
-текущее поведение вместо текста контракта там, где они различаются. Это не
-скрытый дефект.
-
-- **D8 — 415 Unsupported Media Type без `code`.** Запрос к эндпоинту,
-  принимающему тело, выполненный без `Content-Type: application/json`,
-  возвращает `415` от ASP.NET Core с телом `ProblemDetails`, не имеющим
-  расширения `code`. Этот путь находится вне
-  `InvalidModelStateResponseFactory` (который покрывает `400`). Frontend всегда
-  отправляет `Content-Type: application/json`, поэтому это не влияет на MVP.
-  Исправление потребовало бы настройки ответа `415`; отложено.
+Известных отклонений от контракта API нет.
 
 Примечание: путь «недостижимого» конфликта D2 теперь возвращает временный
 `503 checkout_retry` (попытка остаётся `InProgress`), а не `500`.
