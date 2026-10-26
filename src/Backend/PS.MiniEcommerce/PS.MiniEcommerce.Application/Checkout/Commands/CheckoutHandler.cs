@@ -32,6 +32,13 @@ public class CheckoutHandler : IRequestHandler<CheckoutCommand, CheckoutExecutio
         var userId = _currentUser.UserId;
         var utcNow = DateTime.UtcNow;
 
+        if (request.IfMatch is null)
+        {
+            throw new DomainConflictException(
+                "The If-Match header is required for this operation.",
+                "precondition_required");
+        }
+
         var existing = await _checkoutAttemptRepository.GetByUserAndKeyAsync(
             userId,
             request.IdempotencyKey,

@@ -51,6 +51,7 @@ public class CheckoutRollbackTests : IAsyncLifetime
         var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
         Assert.NotNull(error);
         Assert.Equal("insufficient_stock", error.Code);
+        Assert.Equal($"Insufficient stock for: {WirelessMouse} ({productId})", error.Detail);
 
         Assert.Equal(0, await GetOrdersCountAsync());
         Assert.Equal(3, await GetStockQuantityAsync(WirelessMouse));
@@ -78,12 +79,82 @@ public class CheckoutRollbackTests : IAsyncLifetime
         var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
         Assert.NotNull(error);
         Assert.Equal("product_unavailable", error.Code);
+        Assert.Equal($"Unavailable products: {WirelessMouse} ({productId})", error.Detail);
 
         Assert.Equal(0, await GetOrdersCountAsync());
         Assert.Equal(100, await GetStockQuantityAsync(WirelessMouse));
         Assert.Equal(2, await GetAliceCartItemQuantityAsync(productId));
 
         var attempt = await GetCheckoutAttemptAsync("checkout-inactive-1");
+        Assert.NotNull(attempt);
+        Assert.Equal(CheckoutAttemptStatus.Completed, attempt.Status);
+        Assert.Equal(409, attempt.ResponseStatusCode);
+    }
+
+    [Fact]
+    public async Task PostOrders_WithMultipleInsufficientProducts_ReturnsAllInDetail()
+    {
+        var products = await GetActiveProductsAsync(count: 2);
+        var first = products[0];
+        var second = products[1];
+
+        var etag = await AddItemToAliceCartAsync(first.Id, 1);
+        etag = await AddItemToAliceCartAsync(second.Id, 1);
+
+        await SetStockQuantityAsync(first.Id, 0);
+        await SetStockQuantityAsync(second.Id, 0);
+
+        var response = await _client.SendAsync(
+            CreateCheckoutRequest("checkout-insufficient-multi-1", etag));
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("insufficient_stock", error.Code);
+        Assert.Equal(
+            $"Insufficient stock for: {first.Name} ({first.Id}), {second.Name} ({second.Id})",
+            error.Detail);
+
+        Assert.Equal(0, await GetOrdersCountAsync());
+        Assert.Equal(0, await GetStockQuantityByIdAsync(first.Id));
+        Assert.Equal(0, await GetStockQuantityByIdAsync(second.Id));
+        Assert.Equal(2, await GetAliceCartItemCountAsync());
+
+        var attempt = await GetCheckoutAttemptAsync("checkout-insufficient-multi-1");
+        Assert.NotNull(attempt);
+        Assert.Equal(CheckoutAttemptStatus.Completed, attempt.Status);
+        Assert.Equal(409, attempt.ResponseStatusCode);
+    }
+
+    [Fact]
+    public async Task PostOrders_WithInactiveAndInsufficientProducts_ReturnsOnlyUnavailableProducts()
+    {
+        var products = await GetActiveProductsAsync(count: 2);
+        var unavailable = products[0];
+        var insufficient = products[1];
+
+        var etag = await AddItemToAliceCartAsync(unavailable.Id, 1);
+        etag = await AddItemToAliceCartAsync(insufficient.Id, 1);
+
+        await SetProductActiveAsync(unavailable.Id, isActive: false);
+        await SetStockQuantityAsync(insufficient.Id, 0);
+
+        var response = await _client.SendAsync(
+            CreateCheckoutRequest("checkout-priority-1", etag));
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("product_unavailable", error.Code);
+        Assert.Equal(
+            $"Unavailable products: {unavailable.Name} ({unavailable.Id})",
+            error.Detail);
+
+        Assert.Equal(0, await GetOrdersCountAsync());
+        Assert.Equal(0, await GetStockQuantityByIdAsync(insufficient.Id));
+        Assert.Equal(2, await GetAliceCartItemCountAsync());
+
+        var attempt = await GetCheckoutAttemptAsync("checkout-priority-1");
         Assert.NotNull(attempt);
         Assert.Equal(CheckoutAttemptStatus.Completed, attempt.Status);
         Assert.Equal(409, attempt.ResponseStatusCode);
@@ -144,12 +215,58 @@ public class CheckoutRollbackTests : IAsyncLifetime
             .FirstAsync();
     }
 
+    private async Task<List<ProductSnapshot>> GetActiveProductsAsync(int count)
+    {
+        await using var context = CreateContext();
+        var products = await context.Products
+            .AsNoTracking()
+            .Where(product => product.IsActive && product.StockQuantity >= 1)
+            .Select(product => new ProductSnapshot(
+                product.Id,
+                product.Name,
+                product.StockQuantity))
+            .ToListAsync();
+
+        return products
+            .OrderBy(product => product.Id)
+            .Take(count)
+            .ToList();
+    }
+
+    private async Task SetStockQuantityAsync(Guid productId, int stockQuantity)
+    {
+        await using var context = CreateContext();
+        await context.Products
+            .Where(product => product.Id == productId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(product => product.StockQuantity, stockQuantity));
+    }
+
+    private async Task SetProductActiveAsync(Guid productId, bool isActive)
+    {
+        await using var context = CreateContext();
+        await context.Products
+            .Where(product => product.Id == productId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(product => product.IsActive, isActive));
+    }
+
     private async Task<int> GetStockQuantityAsync(string name)
     {
         await using var context = CreateContext();
         return await context.Products
             .AsNoTracking()
             .Where(product => product.Name == name)
+            .Select(product => product.StockQuantity)
+            .FirstAsync();
+    }
+
+    private async Task<int> GetStockQuantityByIdAsync(Guid productId)
+    {
+        await using var context = CreateContext();
+        return await context.Products
+            .AsNoTracking()
+            .Where(product => product.Id == productId)
             .Select(product => product.StockQuantity)
             .FirstAsync();
     }
@@ -174,6 +291,20 @@ public class CheckoutRollbackTests : IAsyncLifetime
             .Where(item => item.CartId == cartId && item.ProductId == productId)
             .Select(item => (int?)item.Quantity)
             .FirstOrDefaultAsync() ?? 0;
+    }
+
+    private async Task<int> GetAliceCartItemCountAsync()
+    {
+        await using var context = CreateContext();
+        var cartId = await GetAliceCartIdAsync(context);
+        if (cartId is null)
+        {
+            return 0;
+        }
+
+        return await context.CartItems
+            .AsNoTracking()
+            .CountAsync(item => item.CartId == cartId);
     }
 
     private async Task<CheckoutAttempt?> GetCheckoutAttemptAsync(string idempotencyKey)
@@ -202,5 +333,7 @@ public class CheckoutRollbackTests : IAsyncLifetime
             .UseSqlServer(_fixture.ConnectionString)
             .Options);
 
-    private sealed record ErrorResponse(string Code);
+    private sealed record ProductSnapshot(Guid Id, string Name, int StockQuantity);
+
+    private sealed record ErrorResponse(string Code, string Detail);
 }

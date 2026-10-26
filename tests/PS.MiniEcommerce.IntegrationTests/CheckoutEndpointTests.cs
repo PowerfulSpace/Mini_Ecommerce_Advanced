@@ -113,6 +113,58 @@ public class CheckoutEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PostOrders_WhenStockChangesAfterPreliminaryCheck_ReturnsInsufficientStockFromUpdatePath()
+    {
+        var products = await GetActiveProductsAsync(count: 3);
+        var first = products[0];
+        var blocked = products[1];
+        var target = products[2];
+
+        var etag = await AddItemToAliceCartAsync(first.Id, 1);
+        etag = await AddItemToAliceCartAsync(blocked.Id, 1);
+        etag = await AddItemToAliceCartAsync(target.Id, 1);
+
+        await using var blockerContext = CreateContext();
+        await using var blockerTransaction = await blockerContext.Database.BeginTransactionAsync();
+
+        await blockerContext.Products
+            .FromSqlInterpolated($"SELECT * FROM Products WITH (UPDLOCK, ROWLOCK) WHERE Id = {blocked.Id}")
+            .AsNoTracking()
+            .ToListAsync();
+
+        var checkout = _client.SendAsync(
+            CreateCheckoutRequest("checkout-update-path-stock-race-1", etag));
+
+        await WaitForStockQuantityWithNoLockAsync(first.Id, first.StockQuantity - 1);
+
+        await blockerContext.Products
+            .Where(product => product.Id == target.Id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(product => product.StockQuantity, 0));
+
+        await blockerTransaction.CommitAsync();
+
+        var response = await checkout.WaitAsync(TimeSpan.FromSeconds(15));
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("insufficient_stock", error.Code);
+        Assert.Equal($"Insufficient stock for: {target.Name} ({target.Id})", error.Detail);
+
+        Assert.Equal(0, await GetOrdersCountAsync());
+        Assert.Equal(3, await GetAliceCartItemCountAsync());
+        Assert.Equal(first.StockQuantity, await GetStockQuantityAsync(first.Name));
+        Assert.Equal(blocked.StockQuantity, await GetStockQuantityAsync(blocked.Name));
+        Assert.Equal(0, await GetStockQuantityAsync(target.Name));
+
+        var attempt = await GetCheckoutAttemptAsync("checkout-update-path-stock-race-1");
+        Assert.NotNull(attempt);
+        Assert.Equal(CheckoutAttemptStatus.Completed, attempt.Status);
+        Assert.Equal(409, attempt.ResponseStatusCode);
+    }
+
+    [Fact]
     public async Task PostOrders_ReplaySameKeyAndFingerprint_ReturnsSameBodyWithoutSecondOrder()
     {
         var productId = await GetActiveProductIdAsync(WirelessMouse);
@@ -228,6 +280,37 @@ public class CheckoutEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PostOrders_WithoutIfMatch_DoesNotConsumeIdempotencyKey()
+    {
+        var productId = await GetActiveProductIdAsync(WirelessMouse);
+        var etag = await AddItemToAliceCartAsync(productId, 1);
+        const string idempotencyKey = "checkout-noifmatch-retry-1";
+
+        var withoutIfMatch = await _client.SendAsync(
+            CreateCheckoutRequest(idempotencyKey, ifMatch: null));
+
+        Assert.Equal(HttpStatusCode.PreconditionRequired, withoutIfMatch.StatusCode);
+        var error = await withoutIfMatch.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("precondition_required", error.Code);
+        Assert.Null(await GetCheckoutAttemptAsync(idempotencyKey));
+
+        var retry = await _client.SendAsync(CreateCheckoutRequest(idempotencyKey, etag));
+
+        Assert.Equal(HttpStatusCode.Created, retry.StatusCode);
+        var order = await retry.Content.ReadFromJsonAsync<OrderResponse>();
+        Assert.NotNull(order);
+        Assert.Equal("Created", order.Status);
+        Assert.Equal(1, await GetOrdersCountAsync());
+        Assert.Equal(0, await GetAliceCartItemCountAsync());
+
+        var attempt = await GetCheckoutAttemptAsync(idempotencyKey);
+        Assert.NotNull(attempt);
+        Assert.Equal(CheckoutAttemptStatus.Completed, attempt.Status);
+        Assert.Equal(201, attempt.ResponseStatusCode);
+    }
+
+    [Fact]
     public async Task PostOrders_WithWildcardIfMatch_Returns400ValidationError()
     {
         var productId = await GetActiveProductIdAsync(WirelessMouse);
@@ -239,6 +322,7 @@ public class CheckoutEndpointTests : IAsyncLifetime
         var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
         Assert.NotNull(error);
         Assert.Equal("validation_error", error.Code);
+        Assert.Null(await GetCheckoutAttemptAsync("checkout-wildcard-1"));
     }
 
     [Fact]
@@ -423,5 +507,5 @@ public class CheckoutEndpointTests : IAsyncLifetime
 
     private sealed record OrderItemResponse(Guid ProductId, string ProductName, decimal UnitPrice, int Quantity, decimal LineTotal);
 
-    private sealed record ErrorResponse(string Code);
+    private sealed record ErrorResponse(string Code, string Detail);
 }

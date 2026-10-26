@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using PS.MiniEcommerce.Application.Carts;
 using PS.MiniEcommerce.Application.Checkout;
@@ -19,13 +20,16 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly AppDbContext _dbContext;
+    private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly ILogger<CheckoutTransactionExecutor> _logger;
 
     public CheckoutTransactionExecutor(
         AppDbContext dbContext,
+        IServiceScopeFactory serviceScopeFactory,
         ILogger<CheckoutTransactionExecutor> logger)
     {
         _dbContext = dbContext;
+        _serviceScopeFactory = serviceScopeFactory;
         _logger = logger;
     }
 
@@ -104,23 +108,25 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
             .ToListAsync(cancellationToken);
 
         var productsById = products.ToDictionary(product => product.Id);
+        var requestedQuantities = cart.Items.ToDictionary(
+            item => item.ProductId,
+            item => item.Quantity);
 
-        foreach (var item in cart.Items)
+        var hasPreliminaryStockOrAvailabilityProblem = cart.Items.Any(item =>
         {
             var product = productsById[item.ProductId];
+            return !product.IsActive || item.Quantity > product.StockQuantity;
+        });
 
-            if (!product.IsActive)
-            {
-                throw new DomainConflictException(
-                    $"Product '{product.Name}' is not available.",
-                    "product_unavailable");
-            }
+        if (hasPreliminaryStockOrAvailabilityProblem)
+        {
+            var error = await BuildStockOrAvailabilityErrorAsync(
+                requestedQuantities,
+                cancellationToken);
 
-            if (item.Quantity > product.StockQuantity)
+            if (error is not null)
             {
-                throw new DomainConflictException(
-                    $"Insufficient stock for product '{product.Name}'.",
-                    "insufficient_stock");
+                throw error;
             }
         }
 
@@ -138,9 +144,19 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
 
             if (affected == 0)
             {
-                throw new DomainConflictException(
-                    $"Insufficient stock for product '{productsById[productId].Name}'.",
-                    "insufficient_stock");
+                await transaction.RollbackAsync(cancellationToken);
+
+                var error = await BuildStockOrAvailabilityErrorAsync(
+                    requestedQuantities,
+                    cancellationToken);
+
+                if (error is null)
+                {
+                    throw new InvalidOperationException(
+                        "A stock or availability conflict could not be reproduced after the checkout transaction was rolled back.");
+                }
+
+                throw error;
             }
         }
 
@@ -228,6 +244,67 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
             ResponsePayload: responsePayload,
             OrderId: order.Id,
             NewCartRowVersion: newRowVersion);
+    }
+
+    private async Task<DomainConflictException?> BuildStockOrAvailabilityErrorAsync(
+        IReadOnlyDictionary<Guid, int> requestedQuantities,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = _serviceScopeFactory.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var productIds = requestedQuantities.Keys
+            .OrderBy(id => id)
+            .ToList();
+
+        var products = await dbContext.Products
+            .AsNoTracking()
+            .Where(product => productIds.Contains(product.Id))
+            .Select(product => new
+            {
+                product.Id,
+                product.Name,
+                product.IsActive,
+                product.StockQuantity
+            })
+            .ToListAsync(cancellationToken);
+
+        var productsById = products.ToDictionary(product => product.Id);
+        var unavailable = new List<AffectedProduct>();
+        var insufficient = new List<AffectedProduct>();
+
+        foreach (var productId in productIds)
+        {
+            if (!productsById.TryGetValue(productId, out var product))
+            {
+                continue;
+            }
+
+            if (!product.IsActive)
+            {
+                unavailable.Add(new AffectedProduct(product.Id, product.Name));
+            }
+            else if (product.StockQuantity < requestedQuantities[productId])
+            {
+                insufficient.Add(new AffectedProduct(product.Id, product.Name));
+            }
+        }
+
+        if (unavailable.Count > 0)
+        {
+            return new DomainConflictException(
+                CheckoutStockErrorDetails.FormatUnavailableProducts(unavailable),
+                "product_unavailable");
+        }
+
+        if (insufficient.Count > 0)
+        {
+            return new DomainConflictException(
+                CheckoutStockErrorDetails.FormatInsufficientStock(insufficient),
+                "insufficient_stock");
+        }
+
+        return null;
     }
 
     private async Task<CheckoutExecutionResult> PersistErrorAsync(
