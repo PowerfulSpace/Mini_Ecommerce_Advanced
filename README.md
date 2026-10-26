@@ -1,12 +1,12 @@
 # Mini E-commerce
 
-Учебный full-stack проект интернет-магазина, предназначенный для практического изучения backend-разработки на .NET, работы с реляционной базой данных, транзакций, конкурентного доступа и согласованности данных.
+Учебный full-stack проект интернет-магазина в рамках MVP+ (M1–M14), предназначенный для практического изучения backend-разработки на .NET, работы с реляционной базой данных, транзакций, конкурентного доступа и согласованности данных.
 
 ## Статус проекта
 
-**Статус:** MVP завершён. Текущая ветка — учебный MVP+ (reference implementation): устраняются известные отклонения от контракта и пробелы в покрытии тестами, без расширения функционального объёма.
+**Статус:** MVP завершён, MVP+ (M1–M14) в работе. Границы объёма и осознанные упрощения — в `RATIONALE.md` (будет создан позже) и `docs/DECISIONS.md` §13.
 
-Backend реализован по Clean Architecture (`PS.MiniEcommerce.Domain`, `.Application`, `.Infrastructure`, `.API`): каталог, корзина, оформление заказа с идемпотентностью и восстановлением, история заказов и отмена. Frontend на Vue 3 + TypeScript реализует каталог, карточку товара, корзину с `ETag`/`If-Match`, checkout с переиспользованием ключа идемпотентности, историю, детали и отмену заказа. Модульные, компонентные и интеграционные тесты покрывают бизнес-инварианты, транзакции, конкурентный доступ и идемпотентность. Последовательность этапов — в `docs/ROADMAP.md`.
+Backend реализован по Clean Architecture (`PS.MiniEcommerce.Domain`, `.Application`, `.Infrastructure`, `.API`): каталог, корзина с выбором позиций, частичный checkout с резервами и идемпотентностью, mock-платежи, история заказов, полная и частичная отмена, admin API и аудит. Frontend на Vue 3 + TypeScript реализует каталог, карточку товара, корзину с `ETag`/`If-Match`, checkout с переиспользованием ключа идемпотентности, историю, детали и отмену заказа. Модульные, компонентные и интеграционные тесты покрывают бизнес-инварианты, транзакции, конкурентный доступ и идемпотентность. Последовательность этапов — в `docs/ROADMAP.md`.
 
 ## Цели проекта
 
@@ -21,6 +21,18 @@ Backend реализован по Clean Architecture (`PS.MiniEcommerce.Domain`,
 - Обеспечение идемпотентности оформления заказа.
 - Написание модульных и интеграционных тестов.
 - Создание frontend-приложения с использованием Vue 3 и TypeScript.
+
+## Функциональные возможности
+
+- Каталог товаров и пользовательская корзина.
+- Выбор позиций корзины через `IsSelected` и частичный checkout только выбранных товаров.
+- Запас в виде `Available` + `Reserved`; `Reserved` не отдаётся публично.
+- Шесть статусов заказа: `Created`, `Paid`, `Shipped`, `Delivered`, `Cancelled`, `Returned`.
+- Mock-платежи: подтверждение, идемпотентность и refund.
+- Полная и частичная отмена с восстановлением запаса и refund.
+- Admin API: deactivate, stock, ship, deliver, return.
+- Доменные события и аудит at-most-once.
+- Идемпотентность оформления заказа и платежей.
 
 ## Технологический стек
 
@@ -65,10 +77,20 @@ MiniEcommerce/
 │   ├── architecture/
 │   │   ├── architecture.md
 │   │   ├── data-model.md
-│   │   └── api.md
+│   │   ├── api.md
+│   │   ├── payments.md
+│   │   └── events.md
 │   └── adr/
 │       ├── ADR-001-cart-concurrency.md
-│       └── ADR-002-checkout-idempotency.md
+│       ├── ADR-002-checkout-idempotency.md
+│       ├── ADR-003-money-value-object.md
+│       ├── ADR-004-order-state-machine.md
+│       ├── ADR-005-stock-reservations.md
+│       ├── ADR-006-partial-checkout-and-cancellation.md
+│       ├── ADR-007-domain-events.md
+│       ├── ADR-008-payments-and-idempotency.md
+│       ├── ADR-009-admin-api-and-roles.md
+│       └── ADR-010-audit.md
 ├── src/
 │   ├── Backend/
 │   │   └── PS.MiniEcommerce/
@@ -83,7 +105,7 @@ MiniEcommerce/
     └── PS.MiniEcommerce.IntegrationTests/
 ```
 
-Это фактическая структура репозитория. Solution остаётся вложенным в каталог backend-проекта (`src/Backend/PS.MiniEcommerce/PS.MiniEcommerce.slnx`, формат `.slnx`); префикс `PS.` намеренный и сохраняется во всех именах проектов, namespace и путях. Проект `Common` в MVP не вводится. Наполнение solution и остальные настройки выполняются по этапам roadmap.
+Это фактическая структура репозитория. Solution остаётся вложенным в каталог backend-проекта (`src/Backend/PS.MiniEcommerce/PS.MiniEcommerce.slnx`, формат `.slnx`); префикс `PS.` намеренный и сохраняется во всех именах проектов, namespace и путях. Проект `Common` в MVP+ не вводится. Наполнение solution и остальные настройки выполняются по этапам roadmap.
 
 ## Документация
 
@@ -97,30 +119,45 @@ MiniEcommerce/
 | `docs/DECISIONS.md` | Реестр принятых технических и архитектурных решений |
 | `docs/FRONTEND.md` | Требования и принципы организации frontend |
 | `docs/ROADMAP.md` | Этапы и последовательность реализации |
+| `RATIONALE.md` | Границы объёма и осознанные упрощения (будет создан позже) |
 | `docs/architecture/architecture.md` | Архитектура backend и ответственность слоёв |
 | `docs/architecture/data-model.md` | Модель данных и ограничения базы |
 | `docs/architecture/api.md` | HTTP API и контракты взаимодействия |
+| `docs/architecture/payments.md` | Платёжная модель, confirm и refund |
+| `docs/architecture/events.md` | Доменные события и аудит |
 | `docs/adr/ADR-001-cart-concurrency.md` | Решения по конкурентному доступу к корзине |
 | `docs/adr/ADR-002-checkout-idempotency.md` | Решения по идемпотентности checkout |
+| `docs/adr/ADR-003-money-value-object.md` | Денежный value object `Money` |
+| `docs/adr/ADR-004-order-state-machine.md` | Шесть статусов и переходы заказа |
+| `docs/adr/ADR-005-stock-reservations.md` | Резервы запаса `Available`/`Reserved` |
+| `docs/adr/ADR-006-partial-checkout-and-cancellation.md` | Частичный checkout и отмена |
+| `docs/adr/ADR-007-domain-events.md` | Доменные события и их публикация |
+| `docs/adr/ADR-008-payments-and-idempotency.md` | Платежи и идемпотентность |
+| `docs/adr/ADR-009-admin-api-and-roles.md` | Admin API и роли |
+| `docs/adr/ADR-010-audit.md` | Аудит |
 
 `AGENTS.md` содержит инструкции для AI-агентов, работающих с репозиторием.
 
-## Объём MVP
+## Объём MVP+ (M1–M14)
 
-В минимальную версию входят:
+MVP+ включает M1–M8, M12 и M13:
 
-- Просмотр каталога товаров.
-- Работа с пользовательской корзиной.
-- Оформление заказа.
-- Просмотр истории заказов.
-- Отмена заказа с восстановлением товарных остатков.
+- Каталог товаров и пользовательская корзина.
+- Выбор позиций и частичный checkout только выбранных товаров.
+- Резервы запаса `Available`/`Reserved`.
+- Шесть статусов заказа.
+- Mock-платежи, подтверждение и refund.
+- Полная и частичная отмена.
+- Admin API: deactivate, stock, ship, deliver, return.
+- Доменные события и аудит at-most-once.
+- Идемпотентность checkout и платежей.
 
-В проект не входят платежи, доставка, купоны, микросервисная архитектура, брокеры сообщений и сложная система авторизации.
+Исключено: M9 (уведомления), M10 (промо/налоги), M11 (реальная JWT/OAuth), M14 (reconciliation), Stripe, вебхуки, outbox, TTL резервов, admin UI, мультивалютность.
 
 ## Принципы разработки
 
 - Следовать согласованной архитектуре и спецификации.
-- Не добавлять функции за пределами согласованного MVP без предварительного обсуждения.
+- Не добавлять функции за пределами согласованного MVP+ без предварительного обсуждения.
 - Не дублировать бизнес-правила между слоями.
 - Проверять важные сценарии модульными и интеграционными тестами.
 - Учитывать конкурентный доступ и целостность данных.
@@ -141,14 +178,14 @@ MiniEcommerce/
 ### Настройка backend
 
 1. Скопировать `src/Backend/PS.MiniEcommerce/PS.MiniEcommerce.API/appsettings.Development.example.json` в `appsettings.Development.json` в том же каталоге и указать строку подключения в `ConnectionStrings:Default`. Файл `appsettings.Development.json` не коммитится.
-2. Создать/обновить схему БД по миграциям, передав строку подключения через переменную окружения `MINIECOMMERCE_DB`:
+2. Создать/обновить схему БД по всем миграциям MVP+, передав строку подключения через переменную окружения `MINIECOMMERCE_DB`:
 
    ```powershell
    $env:MINIECOMMERCE_DB = "Server=localhost;Database=MiniEcommerce_Advanced;Trusted_Connection=True;TrustServerCertificate=True;"
    dotnet ef database update --project src/Backend/PS.MiniEcommerce/PS.MiniEcommerce.Infrastructure --startup-project src/Backend/PS.MiniEcommerce/PS.MiniEcommerce.API
    ```
 
-3. Seed-данные (пользователи Alice и Bob, начальный каталог) применяются автоматически при старте API в окружении Development и идемпотентны.
+3. Seed-данные (пользователи Alice, Bob и admin, начальный каталог) применяются автоматически при старте API в окружении Development и идемпотентны.
 
 ### Запуск backend
 
@@ -190,11 +227,17 @@ npm run lint       # oxlint + eslint
 
 ### Аутентификация в Development
 
-В окружении Development аутентификация выполняется заголовком `X-Test-User` со значениями `alice` или `bob`. Механизм зарегистрирован только в Development и недоступен в Production; неизвестные значения не аутентифицируют запрос. Во frontend identity выбирается в селекторе "dev identity" в шапке (`Header.vue`), который присутствует только в dev-сборке (`import.meta.env.DEV`). Подробности — в `docs/architecture/api.md` §2.1 и `docs/FRONTEND.md` §4.
+В окружении Development аутентификация выполняется заголовком `X-Test-User` со значениями `alice`, `bob` или `admin`. Механизм зарегистрирован только в Development и недоступен в Production; неизвестные значения не аутентифицируют запрос. `admin` получает роль admin только для Development admin endpoints; admin UI отсутствует. Во frontend identity выбирается в селекторе "dev identity" в шапке (`Header.vue`), который присутствует только в dev-сборке (`import.meta.env.DEV`). Подробности — в `docs/architecture/api.md` §2.1, `docs/FRONTEND.md` §4 и `RATIONALE.md` (будет создан позже).
 
 ### Известные проблемы и зафиксированные отклонения
 
 Известные проблемы (отложенные) и зафиксированные отклонения — см. `docs/DECISIONS.md` §13.
+
+- Платежи — mock; Stripe, реальные вебхуки и reconciliation отсутствуют.
+- Аутентификация и admin endpoints доступны только в Development; реальная JWT/OAuth-аутентификация отсутствует.
+- Outbox и гарантированная доставка событий отсутствуют; аудит работает at-most-once.
+- TTL, cleanup и фоновое освобождение резервов отсутствуют.
+- Admin UI, уведомления, промо и мультивалютность не реализованы.
 
 ## Лицензия
 
