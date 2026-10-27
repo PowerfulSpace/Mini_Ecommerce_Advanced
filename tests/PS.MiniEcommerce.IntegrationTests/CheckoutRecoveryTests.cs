@@ -43,7 +43,7 @@ public class CheckoutRecoveryTests : IAsyncLifetime
     public async Task PostOrders_WhenStaleInProgressAttemptExists_RecoversAndCompletesCheckout()
     {
         var productId = await GetActiveProductIdAsync(WirelessMouse);
-        var stockBefore = await GetStockQuantityAsync(WirelessMouse);
+        var stockBefore = await GetStockAsync(WirelessMouse);
 
         var etag = await AddItemToAliceCartAsync(productId, quantity: 1);
         var fingerprint = ComputeFingerprint(etag);
@@ -66,7 +66,9 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         Assert.Equal(201, attempt.ResponseStatusCode);
 
         Assert.Equal(1, await GetOrdersCountAsync());
-        Assert.Equal(stockBefore - 1, await GetStockQuantityAsync(WirelessMouse));
+        var stockAfter = await GetStockAsync(WirelessMouse);
+        Assert.Equal(stockBefore.Available - 1, stockAfter.Available);
+        Assert.Equal(stockBefore.Reserved + 1, stockAfter.Reserved);
         Assert.Equal(0, await GetAliceCartItemCountAsync());
     }
 
@@ -95,7 +97,7 @@ public class CheckoutRecoveryTests : IAsyncLifetime
     public async Task PostOrders_WhenCommitOutcomeIsUncertain_Returns503AndLeavesAttemptInProgress()
     {
         var productId = await GetActiveProductIdAsync(WirelessMouse);
-        var stockBefore = await GetStockQuantityAsync(WirelessMouse);
+        var stockBefore = await GetStockAsync(WirelessMouse);
         var etag = await AddItemToAliceCartAsync(productId, quantity: 1);
 
         var interceptor = new FailOrderSaveInterceptor();
@@ -121,7 +123,9 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         Assert.Null(attemptAfterFirst.OrderId);
 
         Assert.Equal(0, await GetOrdersCountAsync());
-        Assert.Equal(stockBefore, await GetStockQuantityAsync(WirelessMouse));
+        var stockAfterFirst = await GetStockAsync(WirelessMouse);
+        Assert.Equal(stockBefore.Available, stockAfterFirst.Available);
+        Assert.Equal(stockBefore.Reserved, stockAfterFirst.Reserved);
         Assert.Equal(1, await GetAliceCartItemCountAsync());
 
         var second = await client.SendAsync(CreateCheckoutRequest(idempotencyKey, etag));
@@ -138,7 +142,9 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         Assert.Null(attemptAfterSecond.ResponsePayload);
 
         Assert.Equal(0, await GetOrdersCountAsync());
-        Assert.Equal(stockBefore, await GetStockQuantityAsync(WirelessMouse));
+        var stockAfterSecond = await GetStockAsync(WirelessMouse);
+        Assert.Equal(stockBefore.Available, stockAfterSecond.Available);
+        Assert.Equal(stockBefore.Reserved, stockAfterSecond.Reserved);
         Assert.Equal(1, await GetAliceCartItemCountAsync());
     }
 
@@ -290,14 +296,16 @@ public class CheckoutRecoveryTests : IAsyncLifetime
             .FirstOrDefaultAsync(attempt => attempt.IdempotencyKey == idempotencyKey);
     }
 
-    private async Task<int> GetStockQuantityAsync(string name)
+    private async Task<StockSnapshot> GetStockAsync(string name)
     {
         await using var context = CreateContext();
-        return await context.Products
+        var stock = await context.Products
             .AsNoTracking()
             .Where(product => product.Name == name)
-            .Select(product => product.StockQuantity)
+            .Select(product => new { product.Available, product.Reserved })
             .FirstAsync();
+
+        return new StockSnapshot(stock.Available, stock.Reserved);
     }
 
     private async Task<int> GetOrdersCountAsync()
@@ -360,4 +368,6 @@ public class CheckoutRecoveryTests : IAsyncLifetime
     }
 
     private sealed record ErrorResponse(string Code);
+
+    private sealed record StockSnapshot(int Available, int Reserved);
 }

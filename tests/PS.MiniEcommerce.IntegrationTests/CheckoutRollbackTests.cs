@@ -41,7 +41,7 @@ public class CheckoutRollbackTests : IAsyncLifetime
         var etag = await AddItemToAliceCartAsync(productId, 5);
 
         await ExecuteSqlRawAsync(
-            "UPDATE Products SET StockQuantity = {0} WHERE Id = {1}",
+            "UPDATE Products SET Available = {0} WHERE Id = {1}",
             3,
             productId);
 
@@ -54,7 +54,8 @@ public class CheckoutRollbackTests : IAsyncLifetime
         Assert.Equal($"Insufficient stock for: {WirelessMouse} ({productId})", error.Detail);
 
         Assert.Equal(0, await GetOrdersCountAsync());
-        Assert.Equal(3, await GetStockQuantityAsync(WirelessMouse));
+        Assert.Equal(3, await GetAvailableAsync(WirelessMouse));
+        Assert.Equal(0, await GetReservedAsync(WirelessMouse));
         Assert.Equal(5, await GetAliceCartItemQuantityAsync(productId));
 
         var attempt = await GetCheckoutAttemptAsync("checkout-insufficient-1");
@@ -82,7 +83,8 @@ public class CheckoutRollbackTests : IAsyncLifetime
         Assert.Equal($"Unavailable products: {WirelessMouse} ({productId})", error.Detail);
 
         Assert.Equal(0, await GetOrdersCountAsync());
-        Assert.Equal(100, await GetStockQuantityAsync(WirelessMouse));
+        Assert.Equal(100, await GetAvailableAsync(WirelessMouse));
+        Assert.Equal(0, await GetReservedAsync(WirelessMouse));
         Assert.Equal(2, await GetAliceCartItemQuantityAsync(productId));
 
         var attempt = await GetCheckoutAttemptAsync("checkout-inactive-1");
@@ -101,8 +103,8 @@ public class CheckoutRollbackTests : IAsyncLifetime
         var etag = await AddItemToAliceCartAsync(first.Id, 1);
         etag = await AddItemToAliceCartAsync(second.Id, 1);
 
-        await SetStockQuantityAsync(first.Id, 0);
-        await SetStockQuantityAsync(second.Id, 0);
+        await SetAvailableAsync(first.Id, 0);
+        await SetAvailableAsync(second.Id, 0);
 
         var response = await _client.SendAsync(
             CreateCheckoutRequest("checkout-insufficient-multi-1", etag));
@@ -116,8 +118,10 @@ public class CheckoutRollbackTests : IAsyncLifetime
             error.Detail);
 
         Assert.Equal(0, await GetOrdersCountAsync());
-        Assert.Equal(0, await GetStockQuantityByIdAsync(first.Id));
-        Assert.Equal(0, await GetStockQuantityByIdAsync(second.Id));
+        Assert.Equal(0, await GetAvailableByIdAsync(first.Id));
+        Assert.Equal(0, await GetAvailableByIdAsync(second.Id));
+        Assert.Equal(0, await GetReservedByIdAsync(first.Id));
+        Assert.Equal(0, await GetReservedByIdAsync(second.Id));
         Assert.Equal(2, await GetAliceCartItemCountAsync());
 
         var attempt = await GetCheckoutAttemptAsync("checkout-insufficient-multi-1");
@@ -137,7 +141,7 @@ public class CheckoutRollbackTests : IAsyncLifetime
         etag = await AddItemToAliceCartAsync(insufficient.Id, 1);
 
         await SetProductActiveAsync(unavailable.Id, isActive: false);
-        await SetStockQuantityAsync(insufficient.Id, 0);
+        await SetAvailableAsync(insufficient.Id, 0);
 
         var response = await _client.SendAsync(
             CreateCheckoutRequest("checkout-priority-1", etag));
@@ -151,7 +155,8 @@ public class CheckoutRollbackTests : IAsyncLifetime
             error.Detail);
 
         Assert.Equal(0, await GetOrdersCountAsync());
-        Assert.Equal(0, await GetStockQuantityByIdAsync(insufficient.Id));
+        Assert.Equal(0, await GetAvailableByIdAsync(insufficient.Id));
+        Assert.Equal(0, await GetReservedByIdAsync(insufficient.Id));
         Assert.Equal(2, await GetAliceCartItemCountAsync());
 
         var attempt = await GetCheckoutAttemptAsync("checkout-priority-1");
@@ -220,11 +225,11 @@ public class CheckoutRollbackTests : IAsyncLifetime
         await using var context = CreateContext();
         var products = await context.Products
             .AsNoTracking()
-            .Where(product => product.IsActive && product.StockQuantity >= 1)
+            .Where(product => product.IsActive && product.Available >= 1)
             .Select(product => new ProductSnapshot(
                 product.Id,
                 product.Name,
-                product.StockQuantity))
+                product.Available))
             .ToListAsync();
 
         return products
@@ -233,13 +238,13 @@ public class CheckoutRollbackTests : IAsyncLifetime
             .ToList();
     }
 
-    private async Task SetStockQuantityAsync(Guid productId, int stockQuantity)
+    private async Task SetAvailableAsync(Guid productId, int available)
     {
         await using var context = CreateContext();
         await context.Products
             .Where(product => product.Id == productId)
             .ExecuteUpdateAsync(setters => setters
-                .SetProperty(product => product.StockQuantity, stockQuantity));
+                .SetProperty(product => product.Available, available));
     }
 
     private async Task SetProductActiveAsync(Guid productId, bool isActive)
@@ -251,23 +256,43 @@ public class CheckoutRollbackTests : IAsyncLifetime
                 .SetProperty(product => product.IsActive, isActive));
     }
 
-    private async Task<int> GetStockQuantityAsync(string name)
+    private async Task<int> GetAvailableAsync(string name)
     {
         await using var context = CreateContext();
         return await context.Products
             .AsNoTracking()
             .Where(product => product.Name == name)
-            .Select(product => product.StockQuantity)
+            .Select(product => product.Available)
             .FirstAsync();
     }
 
-    private async Task<int> GetStockQuantityByIdAsync(Guid productId)
+    private async Task<int> GetAvailableByIdAsync(Guid productId)
     {
         await using var context = CreateContext();
         return await context.Products
             .AsNoTracking()
             .Where(product => product.Id == productId)
-            .Select(product => product.StockQuantity)
+            .Select(product => product.Available)
+            .FirstAsync();
+    }
+
+    private async Task<int> GetReservedAsync(string name)
+    {
+        await using var context = CreateContext();
+        return await context.Products
+            .AsNoTracking()
+            .Where(product => product.Name == name)
+            .Select(product => product.Reserved)
+            .FirstAsync();
+    }
+
+    private async Task<int> GetReservedByIdAsync(Guid productId)
+    {
+        await using var context = CreateContext();
+        return await context.Products
+            .AsNoTracking()
+            .Where(product => product.Id == productId)
+            .Select(product => product.Reserved)
             .FirstAsync();
     }
 
@@ -333,7 +358,7 @@ public class CheckoutRollbackTests : IAsyncLifetime
             .UseSqlServer(_fixture.ConnectionString)
             .Options);
 
-    private sealed record ProductSnapshot(Guid Id, string Name, int StockQuantity);
+    private sealed record ProductSnapshot(Guid Id, string Name, int Available);
 
     private sealed record ErrorResponse(string Code, string Detail);
 }

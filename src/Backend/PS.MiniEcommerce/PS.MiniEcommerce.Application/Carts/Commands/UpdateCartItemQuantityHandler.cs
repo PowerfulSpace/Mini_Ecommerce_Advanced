@@ -62,7 +62,7 @@ public class UpdateCartItemQuantityHandler : IRequestHandler<UpdateCartItemQuant
                         "product_unavailable");
                 }
 
-                if (request.Quantity > product.StockQuantity)
+                if (request.Quantity > product.Available)
                 {
                     throw new DomainConflictException(
                         $"Insufficient stock for product '{product.Name}'.",

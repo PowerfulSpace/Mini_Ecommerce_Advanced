@@ -35,13 +35,13 @@ public class GetProductsQueryHandlerTests
         Assert.Equal(first.Name, result.Items[0].Name);
         Assert.Equal(first.Description, result.Items[0].Description);
         Assert.Equal(first.Price.Amount, result.Items[0].Price);
-        Assert.Equal(first.StockQuantity, result.Items[0].StockQuantity);
+        Assert.Equal(first.Available, result.Items[0].Available);
 
         Assert.Equal(second.Id, result.Items[1].Id);
         Assert.Equal(second.Name, result.Items[1].Name);
         Assert.Equal(second.Description, result.Items[1].Description);
         Assert.Equal(second.Price.Amount, result.Items[1].Price);
-        Assert.Equal(second.StockQuantity, result.Items[1].StockQuantity);
+        Assert.Equal(second.Available, result.Items[1].Available);
     }
 
     [Fact]

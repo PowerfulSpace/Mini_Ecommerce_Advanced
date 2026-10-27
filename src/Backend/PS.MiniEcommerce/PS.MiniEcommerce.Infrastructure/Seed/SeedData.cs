@@ -75,4 +75,4 @@ public static class SeedData
     };
 }
 
-public sealed record ProductSeed(string Name, string Description, Money Price, int StockQuantity, bool IsActive);
+public sealed record ProductSeed(string Name, string Description, Money Price, int Available, bool IsActive);

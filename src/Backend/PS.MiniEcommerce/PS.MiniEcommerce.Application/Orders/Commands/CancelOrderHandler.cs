@@ -23,9 +23,9 @@ public class CancelOrderHandler : IRequestHandler<CancelOrderCommand, OrderDto>
     {
         var userId = _currentUser.UserId;
 
-        // StockQuantity is restored only for Created orders.
+        // Created -> Cancelled releases Reserved back to Available.
+        // Paid -> Cancelled restores Available only; Reserved is unchanged.
         // Refund for Paid -> Cancelled will be connected in stage 19 (ADR-008).
-        // Stock restoration for Paid is not performed in stage 13 (reservations appear in stage 14).
         var (result, order, currentStatus) = await _orderRepository.CancelAsync(
             request.OrderId, userId, cancellationToken);
 

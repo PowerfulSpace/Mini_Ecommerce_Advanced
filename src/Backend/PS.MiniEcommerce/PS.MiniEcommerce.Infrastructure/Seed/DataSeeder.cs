@@ -53,8 +53,9 @@ public class DataSeeder
                 seed.Name,
                 seed.Description,
                 seed.Price,
-                seed.StockQuantity,
-                SeedData.SeedTimestampUtc);
+                seed.Available,
+                SeedData.SeedTimestampUtc,
+                reserved: 0);
 
             if (!seed.IsActive)
             {

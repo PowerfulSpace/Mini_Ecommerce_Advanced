@@ -14,6 +14,7 @@ namespace PS.MiniEcommerce.IntegrationTests;
 public class CheckoutEndpointTests : IAsyncLifetime
 {
     private const string Alice = "alice";
+    private const string Bob = "bob";
     private const string WirelessMouse = "Wireless Mouse";
 
     private readonly TestDatabaseFixture _fixture;
@@ -57,7 +58,9 @@ public class CheckoutEndpointTests : IAsyncLifetime
         Assert.Equal(WirelessMouse, item.ProductName);
         Assert.Equal(19.99m, item.UnitPrice);
 
-        Assert.Equal(99, await GetStockQuantityAsync(WirelessMouse));
+        var stock = await GetStockAsync(WirelessMouse);
+        Assert.Equal(99, stock.Available);
+        Assert.Equal(1, stock.Reserved);
         Assert.Equal(0, await GetAliceCartItemCountAsync());
 
         var attempt = await GetCheckoutAttemptAsync("checkout-valid-1");
@@ -92,7 +95,7 @@ public class CheckoutEndpointTests : IAsyncLifetime
         var checkout = _client.SendAsync(
             CreateCheckoutRequest("checkout-snapshot-race-1", etag));
 
-        await WaitForStockQuantityWithNoLockAsync(first.Id, first.StockQuantity - 1);
+        await WaitForAvailableWithNoLockAsync(first.Id, first.Available - 1);
 
         await blockerContext.Products
             .Where(product => product.Id == target.Id)
@@ -137,12 +140,12 @@ public class CheckoutEndpointTests : IAsyncLifetime
         var checkout = _client.SendAsync(
             CreateCheckoutRequest("checkout-update-path-stock-race-1", etag));
 
-        await WaitForStockQuantityWithNoLockAsync(first.Id, first.StockQuantity - 1);
+        await WaitForAvailableWithNoLockAsync(first.Id, first.Available - 1);
 
         await blockerContext.Products
             .Where(product => product.Id == target.Id)
             .ExecuteUpdateAsync(setters => setters
-                .SetProperty(product => product.StockQuantity, 0));
+                .SetProperty(product => product.Available, 0));
 
         await blockerTransaction.CommitAsync();
 
@@ -156,14 +159,54 @@ public class CheckoutEndpointTests : IAsyncLifetime
 
         Assert.Equal(0, await GetOrdersCountAsync());
         Assert.Equal(3, await GetAliceCartItemCountAsync());
-        Assert.Equal(first.StockQuantity, await GetStockQuantityAsync(first.Name));
-        Assert.Equal(blocked.StockQuantity, await GetStockQuantityAsync(blocked.Name));
-        Assert.Equal(0, await GetStockQuantityAsync(target.Name));
+
+        var firstStock = await GetStockAsync(first.Name);
+        Assert.Equal(first.Available, firstStock.Available);
+        Assert.Equal(0, firstStock.Reserved);
+
+        var blockedStock = await GetStockAsync(blocked.Name);
+        Assert.Equal(blocked.Available, blockedStock.Available);
+        Assert.Equal(0, blockedStock.Reserved);
+
+        var targetStock = await GetStockAsync(target.Name);
+        Assert.Equal(0, targetStock.Available);
+        Assert.Equal(0, targetStock.Reserved);
 
         var attempt = await GetCheckoutAttemptAsync("checkout-update-path-stock-race-1");
         Assert.NotNull(attempt);
         Assert.Equal(CheckoutAttemptStatus.Completed, attempt.Status);
         Assert.Equal(409, attempt.ResponseStatusCode);
+    }
+
+    [Fact]
+    public async Task PostOrders_TwoConcurrentCheckoutsForLastItem_OneSucceedsAndOneGetsInsufficientStock()
+    {
+        var productId = await GetActiveProductIdAsync("Limited Edition Mug");
+        var aliceEtag = await AddItemToCartAsync(Alice, productId, 1);
+        var bobEtag = await AddItemToCartAsync(Bob, productId, 1);
+
+        var requests = new[]
+        {
+            Task.Run(() => _client.SendAsync(
+                CreateCheckoutRequest(Alice, "checkout-race-last-item-alice", aliceEtag))),
+            Task.Run(() => _client.SendAsync(
+                CreateCheckoutRequest(Bob, "checkout-race-last-item-bob", bobEtag)))
+        };
+
+        var responses = await Task.WhenAll(requests);
+
+        Assert.Equal(1, responses.Count(response => response.StatusCode == HttpStatusCode.Created));
+        var conflict = Assert.Single(
+            responses,
+            response => response.StatusCode == HttpStatusCode.Conflict);
+        var error = await conflict.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("insufficient_stock", error.Code);
+
+        var stock = await GetStockAsync("Limited Edition Mug");
+        Assert.Equal(0, stock.Available);
+        Assert.Equal(1, stock.Reserved);
+        Assert.Equal(1, await GetOrdersCountAsync());
     }
 
     [Fact]
@@ -405,33 +448,44 @@ public class CheckoutEndpointTests : IAsyncLifetime
         Assert.Equal("unauthenticated", error.Code);
     }
 
-    private async Task<string> GetAliceCartETagAsync()
+    private Task<string> GetAliceCartETagAsync() => GetCartETagAsync(Alice);
+
+    private Task<string> AddItemToAliceCartAsync(Guid productId, int quantity) =>
+        AddItemToCartAsync(Alice, productId, quantity);
+
+    private async Task<string> GetCartETagAsync(string testUser)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, "/api/cart");
-        request.Headers.Add("X-Test-User", Alice);
+        request.Headers.Add("X-Test-User", testUser);
         var response = await _client.SendAsync(request);
         response.EnsureSuccessStatusCode();
         return response.Headers.ETag!.Tag;
     }
 
-    private async Task<string> AddItemToAliceCartAsync(Guid productId, int quantity)
+    private async Task<string> AddItemToCartAsync(string testUser, Guid productId, int quantity)
     {
-        var etag = await GetAliceCartETagAsync();
+        var etag = await GetCartETagAsync(testUser);
         var request = new HttpRequestMessage(HttpMethod.Post, "/api/cart/items")
         {
             Content = JsonContent.Create(new { productId, quantity })
         };
-        request.Headers.Add("X-Test-User", Alice);
+        request.Headers.Add("X-Test-User", testUser);
         request.Headers.Add("If-Match", etag);
         var response = await _client.SendAsync(request);
         response.EnsureSuccessStatusCode();
         return response.Headers.ETag!.Tag;
     }
 
-    private static HttpRequestMessage CreateCheckoutRequest(string? idempotencyKey, string? ifMatch)
+    private static HttpRequestMessage CreateCheckoutRequest(string? idempotencyKey, string? ifMatch) =>
+        CreateCheckoutRequest(Alice, idempotencyKey, ifMatch);
+
+    private static HttpRequestMessage CreateCheckoutRequest(
+        string testUser,
+        string? idempotencyKey,
+        string? ifMatch)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/api/orders");
-        request.Headers.Add("X-Test-User", Alice);
+        request.Headers.Add("X-Test-User", testUser);
         if (idempotencyKey is not null)
         {
             request.Headers.Add("Idempotency-Key", idempotencyKey);
@@ -459,12 +513,13 @@ public class CheckoutEndpointTests : IAsyncLifetime
         await using var context = CreateContext();
         var products = await context.Products
             .AsNoTracking()
-            .Where(product => product.IsActive && product.StockQuantity >= 1)
+            .Where(product => product.IsActive && product.Available >= 1)
             .Select(product => new ProductSnapshot(
                 product.Id,
                 product.Name,
                 product.Price,
-                product.StockQuantity))
+                product.Available,
+                product.Reserved))
             .ToListAsync();
 
         return products
@@ -473,20 +528,20 @@ public class CheckoutEndpointTests : IAsyncLifetime
             .ToList();
     }
 
-    private async Task WaitForStockQuantityWithNoLockAsync(Guid productId, int expectedStockQuantity)
+    private async Task WaitForAvailableWithNoLockAsync(Guid productId, int expectedAvailable)
     {
         var deadline = DateTime.UtcNow.AddSeconds(10);
 
         while (DateTime.UtcNow < deadline)
         {
             await using var context = CreateContext();
-            var stockQuantity = await context.Products
+            var available = await context.Products
                 .FromSqlInterpolated($"SELECT * FROM Products WITH (NOLOCK) WHERE Id = {productId}")
                 .AsNoTracking()
-                .Select(product => product.StockQuantity)
+                .Select(product => product.Available)
                 .SingleAsync();
 
-            if (stockQuantity == expectedStockQuantity)
+            if (available == expectedAvailable)
             {
                 return;
             }
@@ -495,17 +550,19 @@ public class CheckoutEndpointTests : IAsyncLifetime
         }
 
         throw new TimeoutException(
-            $"Product {productId} did not reach stock quantity {expectedStockQuantity} before the timeout.");
+            $"Product {productId} did not reach available quantity {expectedAvailable} before the timeout.");
     }
 
-    private async Task<int> GetStockQuantityAsync(string name)
+    private async Task<StockSnapshot> GetStockAsync(string name)
     {
         await using var context = CreateContext();
-        return await context.Products
+        var stock = await context.Products
             .AsNoTracking()
             .Where(product => product.Name == name)
-            .Select(product => product.StockQuantity)
+            .Select(product => new { product.Available, product.Reserved })
             .FirstAsync();
+
+        return new StockSnapshot(stock.Available, stock.Reserved);
     }
 
     private async Task<int> GetOrdersCountAsync()
@@ -552,7 +609,9 @@ public class CheckoutEndpointTests : IAsyncLifetime
             .UseSqlServer(_fixture.ConnectionString)
             .Options);
 
-    private sealed record ProductSnapshot(Guid Id, string Name, Money Price, int StockQuantity);
+    private sealed record ProductSnapshot(Guid Id, string Name, Money Price, int Available, int Reserved);
+
+    private sealed record StockSnapshot(int Available, int Reserved);
 
     private sealed record OrderResponse(Guid Id, string Status, DateTime CreatedAtUtc, decimal TotalAmount, List<OrderItemResponse> Items);
 

@@ -1,11 +1,19 @@
 using Microsoft.EntityFrameworkCore;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Domain;
+using PS.MiniEcommerce.Domain.Exceptions;
 
 namespace PS.MiniEcommerce.Infrastructure.Persistence;
 
 public class OrderRepository : IOrderRepository
 {
+    private enum CancellationStockAction
+    {
+        None,
+        ReleaseReservation,
+        RestoreAvailable
+    }
+
     private readonly AppDbContext _dbContext;
 
     public OrderRepository(AppDbContext dbContext)
@@ -54,7 +62,7 @@ public class OrderRepository : IOrderRepository
     {
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
 
-        var restoreStock = false;
+        var stockAction = CancellationStockAction.None;
 
         var affected = await _dbContext.Orders
             .Where(order =>
@@ -67,7 +75,7 @@ public class OrderRepository : IOrderRepository
 
         if (affected > 0)
         {
-            restoreStock = true;
+            stockAction = CancellationStockAction.ReleaseReservation;
         }
         else
         {
@@ -79,6 +87,11 @@ public class OrderRepository : IOrderRepository
                 .ExecuteUpdateAsync(
                     setters => setters.SetProperty(order => order.Status, OrderStatus.Cancelled),
                     cancellationToken);
+
+            if (affected > 0)
+            {
+                stockAction = CancellationStockAction.RestoreAvailable;
+            }
         }
 
         if (affected == 0)
@@ -104,24 +117,13 @@ public class OrderRepository : IOrderRepository
             return (CancelOrderResult.InvalidTransition, null, existingStatus);
         }
 
-        if (restoreStock)
+        if (stockAction != CancellationStockAction.None
+            && !await TryAdjustStockForCancellationAsync(orderId, stockAction, cancellationToken))
         {
-            var orderItems = await _dbContext.OrderItems
-                .AsNoTracking()
-                .Where(item => item.OrderId == orderId)
-                .OrderBy(item => item.ProductId)
-                .ToListAsync(cancellationToken);
-
-            foreach (var item in orderItems)
-            {
-                await _dbContext.Products
-                    .Where(product => product.Id == item.ProductId)
-                    .ExecuteUpdateAsync(
-                        setters => setters.SetProperty(
-                            product => product.StockQuantity,
-                            product => product.StockQuantity + item.Quantity),
-                        cancellationToken);
-            }
+            await transaction.RollbackAsync(cancellationToken);
+            throw new DomainConflictException(
+                "Failed to restore stock for the cancelled order.",
+                "conflict");
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -134,5 +136,83 @@ public class OrderRepository : IOrderRepository
             .FirstAsync(order => order.Id == orderId, cancellationToken);
 
         return (CancelOrderResult.Success, cancelledOrder, OrderStatus.Cancelled);
+    }
+
+    public async Task ConsumeReservedAsync(Guid orderId, CancellationToken cancellationToken)
+    {
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        var orderItems = await _dbContext.OrderItems
+            .AsNoTracking()
+            .Where(item => item.OrderId == orderId)
+            .OrderBy(item => item.ProductId)
+            .ToListAsync(cancellationToken);
+
+        foreach (var item in orderItems)
+        {
+            var affected = await _dbContext.Products
+                .Where(product =>
+                    product.Id == item.ProductId
+                    && product.Reserved >= item.Quantity)
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(
+                        product => product.Reserved,
+                        product => product.Reserved - item.Quantity),
+                    cancellationToken);
+
+            if (affected == 0)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                throw new DomainConflictException(
+                    "Failed to consume reserved stock.",
+                    "conflict");
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    private async Task<bool> TryAdjustStockForCancellationAsync(
+        Guid orderId,
+        CancellationStockAction stockAction,
+        CancellationToken cancellationToken)
+    {
+        var orderItems = await _dbContext.OrderItems
+            .AsNoTracking()
+            .Where(item => item.OrderId == orderId)
+            .OrderBy(item => item.ProductId)
+            .ToListAsync(cancellationToken);
+
+        foreach (var item in orderItems)
+        {
+            var affected = stockAction == CancellationStockAction.ReleaseReservation
+                ? await _dbContext.Products
+                    .Where(product =>
+                        product.Id == item.ProductId
+                        && product.Reserved >= item.Quantity)
+                    .ExecuteUpdateAsync(
+                        setters => setters
+                            .SetProperty(
+                                product => product.Reserved,
+                                product => product.Reserved - item.Quantity)
+                            .SetProperty(
+                                product => product.Available,
+                                product => product.Available + item.Quantity),
+                        cancellationToken)
+                : await _dbContext.Products
+                    .Where(product => product.Id == item.ProductId)
+                    .ExecuteUpdateAsync(
+                        setters => setters.SetProperty(
+                            product => product.Available,
+                            product => product.Available + item.Quantity),
+                        cancellationToken);
+
+            if (affected == 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

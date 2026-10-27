@@ -111,7 +111,7 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
                 product.Id,
                 product.Name,
                 product.IsActive,
-                product.StockQuantity
+                product.Available
             })
             .ToListAsync(cancellationToken);
 
@@ -123,7 +123,7 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
         var hasPreliminaryStockOrAvailabilityProblem = cart.Items.Any(item =>
         {
             var product = productsById[item.ProductId];
-            return !product.IsActive || item.Quantity > product.StockQuantity;
+            return !product.IsActive || item.Quantity > product.Available;
         });
 
         if (hasPreliminaryStockOrAvailabilityProblem)
@@ -143,11 +143,15 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
             var item = cart.Items.First(cartItem => cartItem.ProductId == productId);
 
             var affected = await _dbContext.Products
-                .Where(product => product.Id == productId && product.StockQuantity >= item.Quantity)
+                .Where(product => product.Id == productId && product.Available >= item.Quantity)
                 .ExecuteUpdateAsync(
-                    setters => setters.SetProperty(
-                        product => product.StockQuantity,
-                        product => product.StockQuantity - item.Quantity),
+                    setters => setters
+                        .SetProperty(
+                            product => product.Available,
+                            product => product.Available - item.Quantity)
+                        .SetProperty(
+                            product => product.Reserved,
+                            product => product.Reserved + item.Quantity),
                     cancellationToken);
 
             if (affected == 0)
@@ -276,7 +280,7 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
                 product.Id,
                 product.Name,
                 product.IsActive,
-                product.StockQuantity
+                product.Available
             })
             .ToListAsync(cancellationToken);
 
@@ -295,7 +299,7 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
             {
                 unavailable.Add(new AffectedProduct(product.Id, product.Name));
             }
-            else if (product.StockQuantity < requestedQuantities[productId])
+            else if (product.Available < requestedQuantities[productId])
             {
                 insufficient.Add(new AffectedProduct(product.Id, product.Name));
             }

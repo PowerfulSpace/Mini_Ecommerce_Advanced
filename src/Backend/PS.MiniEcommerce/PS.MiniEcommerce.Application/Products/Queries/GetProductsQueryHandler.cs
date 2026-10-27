@@ -29,7 +29,7 @@ public class GetProductsQueryHandler : IRequestHandler<GetProductsQuery, Paginat
                 product.Name,
                 product.Description,
                 product.Price.Amount,
-                product.StockQuantity))
+                product.Available))
             .ToList();
 
         return new PaginatedResult<ProductDto>(dtos, request.Page, request.PageSize, totalCount);

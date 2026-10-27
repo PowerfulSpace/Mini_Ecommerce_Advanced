@@ -106,7 +106,7 @@ public class CatalogEndpointsTests : IAsyncLifetime
         Assert.Equal(expected.Name, product.Name);
         Assert.Equal(expected.Description, product.Description);
         Assert.Equal(expected.Price, product.Price);
-        Assert.Equal(expected.StockQuantity, product.StockQuantity);
+        Assert.Equal(expected.Available, product.Available);
     }
 
     [Fact]
@@ -148,7 +148,7 @@ public class CatalogEndpointsTests : IAsyncLifetime
 
     private sealed record PagedResponse(List<ProductResponse> Items, int Page, int PageSize, int TotalCount);
 
-    private sealed record ProductResponse(Guid Id, string Name, string Description, decimal Price, int StockQuantity);
+    private sealed record ProductResponse(Guid Id, string Name, string Description, decimal Price, int Available);
 
     private sealed record ErrorResponse(string Code);
 }

@@ -23,6 +23,9 @@
   этапа 12).
 - Жизненный цикл заказа — явная state machine из шести статусов; см.
   [ADR-004](adr/ADR-004-order-state-machine.md).
+- `Order.PaymentId` введён на этапе 13 как nullable `uniqueidentifier` без FK;
+  FK на `Payment` добавляется на этапе 19. См.
+  [data-model.md](architecture/data-model.md) §4.5, §11.
 - Запас хранится как `Available` + `Reserved`; см.
   [ADR-005](adr/ADR-005-stock-reservations.md).
 - Частичный checkout и частичная отмена определены в

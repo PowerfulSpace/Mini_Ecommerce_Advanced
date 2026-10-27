@@ -158,6 +158,9 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int>("Available")
+                        .HasColumnType("int");
+
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
 
@@ -177,16 +180,18 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                     b.Property<decimal>("Price")
                         .HasColumnType("decimal(18,2)");
 
-                    b.Property<int>("StockQuantity")
+                    b.Property<int>("Reserved")
                         .HasColumnType("int");
 
                     b.HasKey("Id");
 
                     b.ToTable("Products", null, t =>
                         {
+                            t.HasCheckConstraint("CK_Products_Available_NonNegative", "[Available] >= 0");
+
                             t.HasCheckConstraint("CK_Products_Price_NonNegative", "[Price] >= 0");
 
-                            t.HasCheckConstraint("CK_Products_StockQuantity_NonNegative", "[StockQuantity] >= 0");
+                            t.HasCheckConstraint("CK_Products_Reserved_NonNegative", "[Reserved] >= 0");
                         });
                 });
 

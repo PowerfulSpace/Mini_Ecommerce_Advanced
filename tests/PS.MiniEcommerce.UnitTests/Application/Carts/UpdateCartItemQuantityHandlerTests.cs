@@ -68,7 +68,7 @@ public class UpdateCartItemQuantityHandlerTests
     }
 
     [Fact]
-    public async Task Handle_WhenQuantityExceedsStock_ThrowsDomainConflictWithInsufficientStock()
+    public async Task Handle_WhenQuantityExceedsAvailable_ThrowsDomainConflictWithInsufficientStock()
     {
         var cart = Cart.Create(UserId, FixedUtcNow);
         var product = Product.Create("Limited Edition Mug", "Description.", Money.FromDecimal(10m), 3, FixedUtcNow);

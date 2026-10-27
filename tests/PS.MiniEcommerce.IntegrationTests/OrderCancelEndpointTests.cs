@@ -38,7 +38,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
     public async Task CancelOrder_WhenEligible_ReturnsCancelledOrder()
     {
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
-        var stockAfterCheckout = await GetStockQuantityAsync(WirelessMouse);
+        var stockAfterCheckout = await GetStockAsync(WirelessMouse);
 
         var response = await CancelAsync(Alice, orderId);
 
@@ -49,7 +49,9 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         Assert.Equal("Cancelled", order.Status);
 
         Assert.Equal(OrderStatus.Cancelled, await GetOrderStatusAsync(orderId));
-        Assert.Equal(stockAfterCheckout + 2, await GetStockQuantityAsync(WirelessMouse));
+        var stockAfterCancel = await GetStockAsync(WirelessMouse);
+        Assert.Equal(stockAfterCheckout.Available + 2, stockAfterCancel.Available);
+        Assert.Equal(0, stockAfterCancel.Reserved);
     }
 
     [Fact]
@@ -58,7 +60,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
         var first = await CancelAsync(Alice, orderId);
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
-        var stockAfterCancel = await GetStockQuantityAsync(WirelessMouse);
+        var stockAfterCancel = await GetStockAsync(WirelessMouse);
 
         var second = await CancelAsync(Alice, orderId);
 
@@ -67,7 +69,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         Assert.NotNull(error);
         Assert.Equal("order_already_cancelled", error.Code);
 
-        Assert.Equal(stockAfterCancel, await GetStockQuantityAsync(WirelessMouse));
+        Assert.Equal(stockAfterCancel, await GetStockAsync(WirelessMouse));
     }
 
     [Fact]
@@ -112,7 +114,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
     public async Task CancelOrder_ConcurrentCancellations_OneSucceedsOneConflicts()
     {
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
-        var stockAfterCheckout = await GetStockQuantityAsync(WirelessMouse);
+        var stockAfterCheckout = await GetStockAsync(WirelessMouse);
 
         var tasks = new[]
         {
@@ -127,14 +129,16 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         Assert.Equal(1, statuses.Count(status => status == HttpStatusCode.Conflict));
 
         Assert.Equal(OrderStatus.Cancelled, await GetOrderStatusAsync(orderId));
-        Assert.Equal(stockAfterCheckout + 2, await GetStockQuantityAsync(WirelessMouse));
+        var stockAfterCancel = await GetStockAsync(WirelessMouse);
+        Assert.Equal(stockAfterCheckout.Available + 2, stockAfterCancel.Available);
+        Assert.Equal(0, stockAfterCancel.Reserved);
     }
 
     [Fact]
-    public async Task CancelOrder_WhenPaid_ReturnsCancelledAndDoesNotRestoreStock()
+    public async Task CancelOrder_WhenPaid_ReturnsCancelledAndRestoresAvailableButKeepsReserved()
     {
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
-        var stockAfterCheckout = await GetStockQuantityAsync(WirelessMouse);
+        var stockAfterCheckout = await GetStockAsync(WirelessMouse);
         await SetStatusAsync(orderId, OrderStatus.Paid, Guid.NewGuid());
 
         var response = await CancelAsync(Alice, orderId);
@@ -146,7 +150,9 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         Assert.Equal("Cancelled", order.Status);
 
         Assert.Equal(OrderStatus.Cancelled, await GetOrderStatusAsync(orderId));
-        Assert.Equal(stockAfterCheckout, await GetStockQuantityAsync(WirelessMouse));
+        var stockAfterCancel = await GetStockAsync(WirelessMouse);
+        Assert.Equal(stockAfterCheckout.Available + 2, stockAfterCancel.Available);
+        Assert.Equal(stockAfterCheckout.Reserved, stockAfterCancel.Reserved);
     }
 
     [Theory]
@@ -157,7 +163,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         OrderStatus status)
     {
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
-        var stockBeforeCancel = await GetStockQuantityAsync(WirelessMouse);
+        var stockBeforeCancel = await GetStockAsync(WirelessMouse);
         await SetStatusAsync(orderId, status);
 
         var response = await CancelAsync(Alice, orderId);
@@ -168,7 +174,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         Assert.Equal("invalid_order_transition", error.Code);
 
         Assert.Equal(status, await GetOrderStatusAsync(orderId));
-        Assert.Equal(stockBeforeCancel, await GetStockQuantityAsync(WirelessMouse));
+        Assert.Equal(stockBeforeCancel, await GetStockAsync(WirelessMouse));
     }
 
     [Fact]
@@ -282,14 +288,16 @@ public class OrderCancelEndpointTests : IAsyncLifetime
             .FirstAsync();
     }
 
-    private async Task<int> GetStockQuantityAsync(string name)
+    private async Task<StockSnapshot> GetStockAsync(string name)
     {
         await using var context = CreateContext();
-        return await context.Products
+        var stock = await context.Products
             .AsNoTracking()
             .Where(product => product.Name == name)
-            .Select(product => product.StockQuantity)
+            .Select(product => new { product.Available, product.Reserved })
             .FirstAsync();
+
+        return new StockSnapshot(stock.Available, stock.Reserved);
     }
 
     private async Task<OrderStatus> GetOrderStatusAsync(Guid orderId)
@@ -325,4 +333,6 @@ public class OrderCancelEndpointTests : IAsyncLifetime
     private sealed record OrderItemResponse(Guid ProductId, string ProductName, decimal UnitPrice, int Quantity, decimal LineTotal);
 
     private sealed record ErrorResponse(string Code);
+
+    private sealed record StockSnapshot(int Available, int Reserved);
 }

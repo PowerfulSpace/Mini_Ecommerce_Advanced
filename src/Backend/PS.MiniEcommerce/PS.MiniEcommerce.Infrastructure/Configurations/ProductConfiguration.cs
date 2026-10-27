@@ -12,7 +12,8 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.ToTable("Products", table =>
         {
             table.HasCheckConstraint("CK_Products_Price_NonNegative", "[Price] >= 0");
-            table.HasCheckConstraint("CK_Products_StockQuantity_NonNegative", "[StockQuantity] >= 0");
+            table.HasCheckConstraint("CK_Products_Available_NonNegative", "[Available] >= 0");
+            table.HasCheckConstraint("CK_Products_Reserved_NonNegative", "[Reserved] >= 0");
         });
 
         builder.HasKey(product => product.Id);
@@ -33,7 +34,10 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
             .HasConversion(new MoneyValueConverter())
             .HasColumnType("decimal(18,2)");
 
-        builder.Property(product => product.StockQuantity)
+        builder.Property(product => product.Available)
+            .IsRequired();
+
+        builder.Property(product => product.Reserved)
             .IsRequired();
 
         builder.Property(product => product.IsActive)

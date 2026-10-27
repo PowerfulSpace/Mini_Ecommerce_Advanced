@@ -213,7 +213,7 @@ SQL Server автоматически создаёт и обновляет зн�
 | `Id` | `uniqueidentifier` | Первичный ключ |
 | `UserId` | `uniqueidentifier` | Обязательно; внешний ключ на `User` |
 | `Status` | `nvarchar(20)` | Обязательно; CHECK по шести статусам |
-| `PaymentId` | `uniqueidentifier` | NULL; внешний ключ на `Payment` |
+| `PaymentId` | `uniqueidentifier` | NULL; FK не настроен на этапе 13; FK на `Payment` добавляется на этапе 19 вместе с таблицей `Payment` |
 | `CreatedAtUtc` | `datetime2` | Обязательно; UTC |
 | `TotalAmount` | `decimal(18,2)` | Обязательно; неотрицательно |
 | `RowVersion` | `rowversion` | Обязательный токен конкурентности |
@@ -233,6 +233,9 @@ SQL Server автоматически создаёт и обновляет зн�
 - Создание заказа, резервирование запаса и создание `Payment` в состоянии
   `Pending` происходят в одной транзакции оформления заказа.
 - `PaymentId` допускает null; при оплате заказа он должен быть заполнен.
+- `PaymentId` — nullable; FK на `Payment` добавляется на этапе 19 (миграция
+  `AddPaymentsAndRefunds`). До этапа 19 поле существует без FK и заполняется
+  через `Order.Create(..., Guid? paymentId = null)`.
 - Заказ содержит одну или более позиций заказа.
 - Общая сумма заказа рассчитывается по сохранённым ценам за единицу и
   количествам позиций заказа и не пересчитывается при частичной отмене.
@@ -797,17 +800,20 @@ refund повторно; проигравшие попытки получают 
    `Reserved`; существующий запас переносится в `Available`, `Reserved = 0`.
 2. `AddCartItemIsSelected` — добавляет `CartItem.IsSelected` с default `1` для
    существующих строк.
-3. `AddOrderStatuses` — расширяет CHECK `Order.Status` до шести статусов.
-4. `AddPaymentsAndRefunds` — создаёт `Payment` и `Refund`.
-5. `AddOrderRowVersionAndPaymentId` — добавляет `Order.RowVersion` и nullable
-   `Order.PaymentId`; выполняется после `AddPaymentsAndRefunds`.
-6. `AddPaymentAttempts` — создаёт `PaymentAttempt`; выполняется после
+3. `AddOrderStatusesAndPaymentId` (этап 13) — расширяет CHECK `Order.Status` до
+   шести статусов и добавляет `Order.PaymentId` (`uniqueidentifier NULL`) без FK.
+4. `AddPaymentsAndRefunds` (этап 19) — создаёт `Payment` и `Refund`; добавляет FK
+   `Order.PaymentId → Payment`. Выполняется после
+   `AddOrderStatusesAndPaymentId`.
+5. `AddPaymentAttempts` — создаёт `PaymentAttempt`; выполняется после
    `AddPaymentsAndRefunds`.
-7. `AddOrderItemCancellations` — создаёт `OrderItemCancellation`.
-8. `AddAuditLog` — создаёт `AuditLog`.
+6. `AddOrderItemCancellations` — создаёт `OrderItemCancellation`.
+7. `AddAuditLog` — создаёт `AuditLog`.
 
-Порядок миграций должен соответствовать зависимостям внешних ключей. Миграция
-`AddOrderRowVersionAndPaymentId` не должна выполняться раньше создания `Payment`.
+Порядок миграций должен соответствовать зависимостям внешних ключей. FK
+`Order.PaymentId → Payment` создаётся в `AddPaymentsAndRefunds`. Отдельная
+миграция `AddOrderRowVersionAndPaymentId` не создаётся: поле `PaymentId` уже
+добавлено в `AddOrderStatusesAndPaymentId`.
 
 ## 12. Будущее развитие
 

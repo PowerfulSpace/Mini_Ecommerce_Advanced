@@ -55,7 +55,7 @@ public class AddCartItemHandler : IRequestHandler<AddCartItemCommand, GetCartRes
                 var existingQuantity = cart.Items
                     .FirstOrDefault(item => item.ProductId == request.ProductId)?.Quantity ?? 0;
 
-                if (existingQuantity + request.Quantity > product.StockQuantity)
+                if (existingQuantity + request.Quantity > product.Available)
                 {
                     throw new DomainConflictException(
                         $"Insufficient stock for product '{product.Name}'.",

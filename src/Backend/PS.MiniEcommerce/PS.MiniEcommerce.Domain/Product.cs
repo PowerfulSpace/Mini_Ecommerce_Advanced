@@ -15,24 +15,40 @@ public class Product
 
     public Money Price { get; private set; }
 
-    public int StockQuantity { get; private set; }
+    public int Available { get; private set; }
+
+    public int Reserved { get; private set; }
 
     public bool IsActive { get; private set; }
 
     public DateTime CreatedAtUtc { get; private set; }
 
-    private Product(Guid id, string name, string description, Money price, int stockQuantity, DateTime createdAtUtc)
+    private Product(
+        Guid id,
+        string name,
+        string description,
+        Money price,
+        int available,
+        int reserved,
+        DateTime createdAtUtc)
     {
         Id = id;
         Name = name;
         Description = description;
         Price = price;
-        StockQuantity = stockQuantity;
+        Available = available;
+        Reserved = reserved;
         IsActive = true;
         CreatedAtUtc = createdAtUtc;
     }
 
-    public static Product Create(string name, string description, Money price, int stockQuantity, DateTime utcNow)
+    public static Product Create(
+        string name,
+        string description,
+        Money price,
+        int available,
+        DateTime utcNow,
+        int reserved = 0)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -59,12 +75,17 @@ public class Product
             throw new DomainValidationException("Price must not be negative.");
         }
 
-        if (stockQuantity < 0)
+        if (available < 0)
         {
-            throw new DomainValidationException("Stock quantity must not be negative.");
+            throw new DomainValidationException("Available quantity must not be negative.");
         }
 
-        return new Product(Guid.NewGuid(), name, description, price, stockQuantity, utcNow);
+        if (reserved < 0)
+        {
+            throw new DomainValidationException("Reserved quantity must not be negative.");
+        }
+
+        return new Product(Guid.NewGuid(), name, description, price, available, reserved, utcNow);
     }
 
     public void Deactivate()
@@ -72,28 +93,84 @@ public class Product
         IsActive = false;
     }
 
-    public void DeductStock(int quantity)
+    public void Reserve(int quantity)
     {
-        if (quantity <= 0)
-        {
-            throw new DomainValidationException("Quantity must be positive.");
-        }
+        EnsurePositiveQuantity(quantity);
 
-        if (quantity > StockQuantity)
+        if (quantity > Available)
         {
             throw new DomainConflictException("Insufficient stock.");
         }
 
-        StockQuantity -= quantity;
+        Available -= quantity;
+        Reserved += quantity;
+        EnsureStockInvariants();
     }
 
-    public void RestoreStock(int quantity)
+    public void Release(int quantity)
+    {
+        EnsurePositiveQuantity(quantity);
+
+        if (quantity > Reserved)
+        {
+            throw new DomainConflictException("Insufficient reserved stock.");
+        }
+
+        Reserved -= quantity;
+        Available += quantity;
+        EnsureStockInvariants();
+    }
+
+    public void Consume(int quantity)
+    {
+        EnsurePositiveQuantity(quantity);
+
+        if (quantity > Reserved)
+        {
+            throw new DomainConflictException("Insufficient reserved stock.");
+        }
+
+        Reserved -= quantity;
+        EnsureStockInvariants();
+    }
+
+    public void RestoreAvailable(int quantity)
+    {
+        EnsurePositiveQuantity(quantity);
+
+        Available += quantity;
+        EnsureStockInvariants();
+    }
+
+    public void AdjustAvailable(int newAvailable)
+    {
+        if (newAvailable < 0)
+        {
+            throw new DomainValidationException("Available quantity must not be negative.");
+        }
+
+        Available = newAvailable;
+        EnsureStockInvariants();
+    }
+
+    private static void EnsurePositiveQuantity(int quantity)
     {
         if (quantity <= 0)
         {
             throw new DomainValidationException("Quantity must be positive.");
         }
+    }
 
-        StockQuantity += quantity;
+    private void EnsureStockInvariants()
+    {
+        if (Available < 0)
+        {
+            throw new DomainValidationException("Available quantity must not be negative.");
+        }
+
+        if (Reserved < 0)
+        {
+            throw new DomainValidationException("Reserved quantity must not be negative.");
+        }
     }
 }

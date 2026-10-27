@@ -19,4 +19,6 @@ public interface IOrderRepository
         Guid orderId,
         Guid userId,
         CancellationToken cancellationToken);
+
+    Task ConsumeReservedAsync(Guid orderId, CancellationToken cancellationToken);
 }
