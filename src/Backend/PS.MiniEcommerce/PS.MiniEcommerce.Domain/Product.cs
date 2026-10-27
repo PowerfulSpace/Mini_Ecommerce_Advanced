@@ -13,7 +13,7 @@ public class Product
 
     public string Description { get; private set; }
 
-    public decimal Price { get; private set; }
+    public Money Price { get; private set; }
 
     public int StockQuantity { get; private set; }
 
@@ -21,7 +21,7 @@ public class Product
 
     public DateTime CreatedAtUtc { get; private set; }
 
-    private Product(Guid id, string name, string description, decimal price, int stockQuantity, DateTime createdAtUtc)
+    private Product(Guid id, string name, string description, Money price, int stockQuantity, DateTime createdAtUtc)
     {
         Id = id;
         Name = name;
@@ -32,7 +32,7 @@ public class Product
         CreatedAtUtc = createdAtUtc;
     }
 
-    public static Product Create(string name, string description, decimal price, int stockQuantity, DateTime utcNow)
+    public static Product Create(string name, string description, Money price, int stockQuantity, DateTime utcNow)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -54,7 +54,7 @@ public class Product
             throw new DomainValidationException("Description must not exceed 2000 characters.");
         }
 
-        if (price < 0)
+        if (price.Amount < 0)
         {
             throw new DomainValidationException("Price must not be negative.");
         }

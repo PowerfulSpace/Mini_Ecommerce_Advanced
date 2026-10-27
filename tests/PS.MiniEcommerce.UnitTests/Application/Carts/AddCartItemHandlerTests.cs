@@ -21,7 +21,7 @@ public class AddCartItemHandlerTests
     public async Task Handle_WhenProductExists_AddsItemAndReturnsCart()
     {
         var cart = Cart.Create(UserId, FixedUtcNow);
-        var product = Product.Create("Wireless Mouse", "Description.", 10m, 10, FixedUtcNow);
+        var product = Product.Create("Wireless Mouse", "Description.", Money.FromDecimal(10m), 10, FixedUtcNow);
         var handler = CreateHandler(cart, product);
 
         var result = await handler.Handle(
@@ -53,7 +53,7 @@ public class AddCartItemHandlerTests
     public async Task Handle_WhenProductInactive_ThrowsDomainConflictWithProductUnavailable()
     {
         var cart = Cart.Create(UserId, FixedUtcNow);
-        var product = Product.Create("Discontinued Tablet Case", "Description.", 10m, 10, FixedUtcNow);
+        var product = Product.Create("Discontinued Tablet Case", "Description.", Money.FromDecimal(10m), 10, FixedUtcNow);
         product.Deactivate();
         var handler = CreateHandler(cart, product);
 
@@ -69,7 +69,7 @@ public class AddCartItemHandlerTests
     public async Task Handle_WhenResultingQuantityExceedsStock_ThrowsDomainConflictWithInsufficientStock()
     {
         var cart = Cart.Create(UserId, FixedUtcNow);
-        var product = Product.Create("Limited Edition Mug", "Description.", 10m, 5, FixedUtcNow);
+        var product = Product.Create("Limited Edition Mug", "Description.", Money.FromDecimal(10m), 5, FixedUtcNow);
         cart.AddItem(product.Id, 3, FixedUtcNow);
         var handler = CreateHandler(cart, product);
 

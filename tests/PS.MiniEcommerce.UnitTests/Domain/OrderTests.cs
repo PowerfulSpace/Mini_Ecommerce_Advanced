@@ -14,7 +14,7 @@ public class OrderTests
     [Fact]
     public void Create_WithSingleItem_SetsProperties()
     {
-        var data = new OrderItemData(ProductA, "Widget", 19.99m, 3);
+        var data = new OrderItemData(ProductA, "Widget", Money.FromDecimal(19.99m), 3);
 
         var order = Order.Create(UserId, new[] { data }, FixedUtcNow);
 
@@ -22,7 +22,7 @@ public class OrderTests
         Assert.Equal(UserId, order.UserId);
         Assert.Equal(OrderStatus.Created, order.Status);
         Assert.Equal(FixedUtcNow, order.CreatedAtUtc);
-        Assert.Equal(59.97m, order.TotalAmount);
+        Assert.Equal(59.97m, order.TotalAmount.Amount);
         Assert.Single(order.Items);
     }
 
@@ -31,14 +31,14 @@ public class OrderTests
     {
         var items = new[]
         {
-            new OrderItemData(ProductA, "Widget", 10.00m, 2),
-            new OrderItemData(ProductB, "Gadget", 5.50m, 4)
+            new OrderItemData(ProductA, "Widget", Money.FromDecimal(10.00m), 2),
+            new OrderItemData(ProductB, "Gadget", Money.FromDecimal(5.50m), 4)
         };
 
         var order = Order.Create(UserId, items, FixedUtcNow);
 
         Assert.Equal(2, order.Items.Count);
-        Assert.Equal(42.00m, order.TotalAmount);
+        Assert.Equal(42.00m, order.TotalAmount.Amount);
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public class OrderTests
     [Fact]
     public void Create_WithSingleItem_SetsOrderIdOnItem()
     {
-        var data = new OrderItemData(ProductA, "Widget", 19.99m, 1);
+        var data = new OrderItemData(ProductA, "Widget", Money.FromDecimal(19.99m), 1);
 
         var order = Order.Create(UserId, new[] { data }, FixedUtcNow);
 
@@ -67,21 +67,21 @@ public class OrderTests
     [Fact]
     public void Create_WithSingleItem_CopiesSnapshotValues()
     {
-        var data = new OrderItemData(ProductA, "Widget", 19.99m, 3);
+        var data = new OrderItemData(ProductA, "Widget", Money.FromDecimal(19.99m), 3);
 
         var order = Order.Create(UserId, new[] { data }, FixedUtcNow);
 
         var item = Assert.Single(order.Items);
         Assert.Equal(ProductA, item.ProductId);
         Assert.Equal("Widget", item.ProductName);
-        Assert.Equal(19.99m, item.UnitPrice);
+        Assert.Equal(19.99m, item.UnitPrice.Amount);
         Assert.Equal(3, item.Quantity);
     }
 
     [Fact]
     public void Create_WithNullProductName_ThrowsDomainValidationException()
     {
-        var data = new OrderItemData(ProductA, null!, 10m, 1);
+        var data = new OrderItemData(ProductA, null!, Money.FromDecimal(10m), 1);
 
         Assert.Throws<DomainValidationException>(() => Order.Create(UserId, new[] { data }, FixedUtcNow));
     }
@@ -89,7 +89,7 @@ public class OrderTests
     [Fact]
     public void Create_WithEmptyProductName_ThrowsDomainValidationException()
     {
-        var data = new OrderItemData(ProductA, string.Empty, 10m, 1);
+        var data = new OrderItemData(ProductA, string.Empty, Money.FromDecimal(10m), 1);
 
         Assert.Throws<DomainValidationException>(() => Order.Create(UserId, new[] { data }, FixedUtcNow));
     }
@@ -97,7 +97,7 @@ public class OrderTests
     [Fact]
     public void Create_WithWhitespaceProductName_ThrowsDomainValidationException()
     {
-        var data = new OrderItemData(ProductA, "   ", 10m, 1);
+        var data = new OrderItemData(ProductA, "   ", Money.FromDecimal(10m), 1);
 
         Assert.Throws<DomainValidationException>(() => Order.Create(UserId, new[] { data }, FixedUtcNow));
     }
@@ -105,7 +105,7 @@ public class OrderTests
     [Fact]
     public void Create_WithProductNameLongerThan200Characters_ThrowsDomainValidationException()
     {
-        var data = new OrderItemData(ProductA, new string('a', 201), 10m, 1);
+        var data = new OrderItemData(ProductA, new string('a', 201), Money.FromDecimal(10m), 1);
 
         Assert.Throws<DomainValidationException>(() => Order.Create(UserId, new[] { data }, FixedUtcNow));
     }
@@ -113,7 +113,7 @@ public class OrderTests
     [Fact]
     public void Create_WithNegativeUnitPrice_ThrowsDomainValidationException()
     {
-        var data = new OrderItemData(ProductA, "Widget", -0.01m, 1);
+        var data = new OrderItemData(ProductA, "Widget", Money.FromDecimal(-0.01m), 1);
 
         Assert.Throws<DomainValidationException>(() => Order.Create(UserId, new[] { data }, FixedUtcNow));
     }
@@ -121,7 +121,7 @@ public class OrderTests
     [Fact]
     public void Create_WithZeroQuantity_ThrowsDomainValidationException()
     {
-        var data = new OrderItemData(ProductA, "Widget", 10m, 0);
+        var data = new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 0);
 
         Assert.Throws<DomainValidationException>(() => Order.Create(UserId, new[] { data }, FixedUtcNow));
     }
@@ -129,7 +129,7 @@ public class OrderTests
     [Fact]
     public void Create_WithNegativeQuantity_ThrowsDomainValidationException()
     {
-        var data = new OrderItemData(ProductA, "Widget", 10m, -1);
+        var data = new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), -1);
 
         Assert.Throws<DomainValidationException>(() => Order.Create(UserId, new[] { data }, FixedUtcNow));
     }
@@ -137,7 +137,7 @@ public class OrderTests
     [Fact]
     public void Cancel_OnCreatedOrder_SetsStatusCancelled()
     {
-        var order = Order.Create(UserId, new[] { new OrderItemData(ProductA, "Widget", 10m, 1) }, FixedUtcNow);
+        var order = Order.Create(UserId, new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 1) }, FixedUtcNow);
 
         order.Cancel();
 
@@ -147,7 +147,7 @@ public class OrderTests
     [Fact]
     public void Cancel_WhenAlreadyCancelled_ThrowsDomainConflictException()
     {
-        var order = Order.Create(UserId, new[] { new OrderItemData(ProductA, "Widget", 10m, 1) }, FixedUtcNow);
+        var order = Order.Create(UserId, new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 1) }, FixedUtcNow);
         order.Cancel();
 
         Assert.Throws<DomainConflictException>(() => order.Cancel());
@@ -158,22 +158,22 @@ public class OrderTests
     {
         var items = new[]
         {
-            new OrderItemData(ProductA, "Free widget", 0m, 5),
-            new OrderItemData(ProductB, "Free gadget", 0m, 2)
+            new OrderItemData(ProductA, "Free widget", Money.FromDecimal(0m), 5),
+            new OrderItemData(ProductB, "Free gadget", Money.FromDecimal(0m), 2)
         };
 
         var order = Order.Create(UserId, items, FixedUtcNow);
 
-        Assert.Equal(0m, order.TotalAmount);
+        Assert.Equal(0m, order.TotalAmount.Amount);
     }
 
     [Fact]
     public void Create_WithDecimalPrices_PreservesTotalPrecision()
     {
-        var data = new OrderItemData(ProductA, "Widget", 19.99m, 3);
+        var data = new OrderItemData(ProductA, "Widget", Money.FromDecimal(19.99m), 3);
 
         var order = Order.Create(UserId, new[] { data }, FixedUtcNow);
 
-        Assert.Equal(59.97m, order.TotalAmount);
+        Assert.Equal(59.97m, order.TotalAmount.Amount);
     }
 }

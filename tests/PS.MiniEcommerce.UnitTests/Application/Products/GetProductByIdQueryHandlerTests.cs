@@ -13,7 +13,7 @@ public class GetProductByIdQueryHandlerTests
     [Fact]
     public async Task Handle_WhenProductExists_ReturnsDto()
     {
-        var product = Product.Create("Alpha", "First product.", 1.11m, 11, FixedUtcNow);
+        var product = Product.Create("Alpha", "First product.", Money.FromDecimal(1.11m), 11, FixedUtcNow);
 
         var repository = Substitute.For<IProductRepository>();
         repository
@@ -27,7 +27,7 @@ public class GetProductByIdQueryHandlerTests
         Assert.Equal(product.Id, dto.Id);
         Assert.Equal(product.Name, dto.Name);
         Assert.Equal(product.Description, dto.Description);
-        Assert.Equal(product.Price, dto.Price);
+        Assert.Equal(product.Price.Amount, dto.Price);
         Assert.Equal(product.StockQuantity, dto.StockQuantity);
     }
 

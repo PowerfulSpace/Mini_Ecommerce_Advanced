@@ -9,18 +9,18 @@ public class ProductTests
 
     private static Product CreateValidProduct(int stockQuantity = 10, decimal price = 9.99m)
     {
-        return Product.Create("Sample product", "A sample product.", price, stockQuantity, FixedUtcNow);
+        return Product.Create("Sample product", "A sample product.", Money.FromDecimal(price), stockQuantity, FixedUtcNow);
     }
 
     [Fact]
     public void Create_WithValidData_SetsProperties()
     {
-        var product = Product.Create("Sample product", "A sample product.", 9.99m, 10, FixedUtcNow);
+        var product = Product.Create("Sample product", "A sample product.", Money.FromDecimal(9.99m), 10, FixedUtcNow);
 
         Assert.NotEqual(Guid.Empty, product.Id);
         Assert.Equal("Sample product", product.Name);
         Assert.Equal("A sample product.", product.Description);
-        Assert.Equal(9.99m, product.Price);
+        Assert.Equal(9.99m, product.Price.Amount);
         Assert.Equal(10, product.StockQuantity);
         Assert.True(product.IsActive);
         Assert.Equal(FixedUtcNow, product.CreatedAtUtc);
@@ -30,21 +30,21 @@ public class ProductTests
     public void Create_WithEmptyName_ThrowsDomainValidationException()
     {
         Assert.Throws<DomainValidationException>(
-            () => Product.Create(string.Empty, "A sample product.", 9.99m, 10, FixedUtcNow));
+            () => Product.Create(string.Empty, "A sample product.", Money.FromDecimal(9.99m), 10, FixedUtcNow));
     }
 
     [Fact]
     public void Create_WithWhitespaceName_ThrowsDomainValidationException()
     {
         Assert.Throws<DomainValidationException>(
-            () => Product.Create("   ", "A sample product.", 9.99m, 10, FixedUtcNow));
+            () => Product.Create("   ", "A sample product.", Money.FromDecimal(9.99m), 10, FixedUtcNow));
     }
 
     [Fact]
     public void Create_WithNullName_ThrowsDomainValidationException()
     {
         Assert.Throws<DomainValidationException>(
-            () => Product.Create(null!, "A sample product.", 9.99m, 10, FixedUtcNow));
+            () => Product.Create(null!, "A sample product.", Money.FromDecimal(9.99m), 10, FixedUtcNow));
     }
 
     [Fact]
@@ -53,14 +53,14 @@ public class ProductTests
         var name = new string('a', 201);
 
         Assert.Throws<DomainValidationException>(
-            () => Product.Create(name, "A sample product.", 9.99m, 10, FixedUtcNow));
+            () => Product.Create(name, "A sample product.", Money.FromDecimal(9.99m), 10, FixedUtcNow));
     }
 
     [Fact]
     public void Create_WithNullDescription_ThrowsDomainValidationException()
     {
         Assert.Throws<DomainValidationException>(
-            () => Product.Create("Sample product", null!, 9.99m, 10, FixedUtcNow));
+            () => Product.Create("Sample product", null!, Money.FromDecimal(9.99m), 10, FixedUtcNow));
     }
 
     [Fact]
@@ -69,21 +69,21 @@ public class ProductTests
         var description = new string('a', 2001);
 
         Assert.Throws<DomainValidationException>(
-            () => Product.Create("Sample product", description, 9.99m, 10, FixedUtcNow));
+            () => Product.Create("Sample product", description, Money.FromDecimal(9.99m), 10, FixedUtcNow));
     }
 
     [Fact]
     public void Create_WithNegativePrice_ThrowsDomainValidationException()
     {
         Assert.Throws<DomainValidationException>(
-            () => Product.Create("Sample product", "A sample product.", -0.01m, 10, FixedUtcNow));
+            () => Product.Create("Sample product", "A sample product.", Money.FromDecimal(-0.01m), 10, FixedUtcNow));
     }
 
     [Fact]
     public void Create_WithNegativeStockQuantity_ThrowsDomainValidationException()
     {
         Assert.Throws<DomainValidationException>(
-            () => Product.Create("Sample product", "A sample product.", 9.99m, -1, FixedUtcNow));
+            () => Product.Create("Sample product", "A sample product.", Money.FromDecimal(9.99m), -1, FixedUtcNow));
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Infrastructure;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 using PS.MiniEcommerce.Infrastructure.Seed;
@@ -74,7 +75,7 @@ public class CheckoutEndpointTests : IAsyncLifetime
         var blocked = products[1];
         var target = products[2];
         var updatedName = target.Name + " (updated)";
-        var updatedPrice = target.Price + 10m;
+        var updatedPrice = Money.FromDecimal(target.Price.Amount + 10m);
 
         var etag = await AddItemToAliceCartAsync(first.Id, 1);
         etag = await AddItemToAliceCartAsync(blocked.Id, 1);
@@ -109,8 +110,8 @@ public class CheckoutEndpointTests : IAsyncLifetime
 
         var item = Assert.Single(order.Items, orderItem => orderItem.ProductId == target.Id);
         Assert.Equal(updatedName, item.ProductName);
-        Assert.Equal(updatedPrice, item.UnitPrice);
-        Assert.Equal(updatedPrice * item.Quantity, item.LineTotal);
+        Assert.Equal(updatedPrice.Amount, item.UnitPrice);
+        Assert.Equal(updatedPrice.Amount * item.Quantity, item.LineTotal);
     }
 
     [Fact]
@@ -551,7 +552,7 @@ public class CheckoutEndpointTests : IAsyncLifetime
             .UseSqlServer(_fixture.ConnectionString)
             .Options);
 
-    private sealed record ProductSnapshot(Guid Id, string Name, decimal Price, int StockQuantity);
+    private sealed record ProductSnapshot(Guid Id, string Name, Money Price, int StockQuantity);
 
     private sealed record OrderResponse(Guid Id, string Status, DateTime CreatedAtUtc, decimal TotalAmount, List<OrderItemResponse> Items);
 

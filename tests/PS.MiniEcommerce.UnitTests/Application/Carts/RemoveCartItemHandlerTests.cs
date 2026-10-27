@@ -20,7 +20,7 @@ public class RemoveCartItemHandlerTests
     public async Task Handle_WhenItemExists_RemovesItem()
     {
         var cart = Cart.Create(UserId, FixedUtcNow);
-        var product = Product.Create("Wireless Mouse", "Description.", 10m, 10, FixedUtcNow);
+        var product = Product.Create("Wireless Mouse", "Description.", Money.FromDecimal(10m), 10, FixedUtcNow);
         cart.AddItem(product.Id, 2, FixedUtcNow);
         var handler = CreateHandler(cart, product);
 

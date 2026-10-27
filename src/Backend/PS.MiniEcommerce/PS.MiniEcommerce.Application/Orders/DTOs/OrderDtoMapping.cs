@@ -8,19 +8,19 @@ public static class OrderDtoMapping
         order.Id,
         order.Status.ToString(),
         order.CreatedAtUtc,
-        order.TotalAmount,
+        order.TotalAmount.Amount,
         order.Items
             .Select(item => new OrderItemDto(
                 item.ProductId,
                 item.ProductName,
-                item.UnitPrice,
+                item.UnitPrice.Amount,
                 item.Quantity,
-                item.UnitPrice * item.Quantity))
+                (item.UnitPrice * item.Quantity).Amount))
             .ToList());
 
     public static OrderSummaryDto ToSummaryDto(this Order order) => new(
         order.Id,
         order.Status.ToString(),
         order.CreatedAtUtc,
-        order.TotalAmount);
+        order.TotalAmount.Amount);
 }

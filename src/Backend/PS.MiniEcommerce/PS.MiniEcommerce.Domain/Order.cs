@@ -14,7 +14,7 @@ public class Order
 
     public DateTime CreatedAtUtc { get; private set; }
 
-    public decimal TotalAmount { get; private set; }
+    public Money TotalAmount { get; private set; }
 
     public IReadOnlyCollection<OrderItem> Items => _items.AsReadOnly();
 
@@ -50,7 +50,9 @@ public class Order
             order._items.Add(new OrderItem(order.Id, data));
         }
 
-        order.TotalAmount = order._items.Sum(item => item.UnitPrice * item.Quantity);
+        order.TotalAmount = order._items.Aggregate(
+            Money.Zero,
+            (total, item) => total + item.UnitPrice * item.Quantity);
 
         return order;
     }

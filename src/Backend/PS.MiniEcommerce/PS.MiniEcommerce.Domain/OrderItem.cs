@@ -14,7 +14,7 @@ public class OrderItem
 
     public string ProductName { get; private set; }
 
-    public decimal UnitPrice { get; private set; }
+    public Money UnitPrice { get; private set; }
 
     public int Quantity { get; private set; }
 
@@ -35,7 +35,7 @@ public class OrderItem
             throw new DomainValidationException("Product name must not exceed 200 characters.");
         }
 
-        if (data.UnitPrice < 0)
+        if (data.UnitPrice.Amount < 0)
         {
             throw new DomainValidationException("Unit price must not be negative.");
         }

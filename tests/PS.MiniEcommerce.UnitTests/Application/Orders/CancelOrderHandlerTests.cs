@@ -66,7 +66,7 @@ public class CancelOrderHandlerTests
     }
 
     private static Order CreateOrder() =>
-        Order.Create(UserId, new[] { new OrderItemData(ProductA, "Widget", 19.99m, 1) }, FixedUtcNow);
+        Order.Create(UserId, new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(19.99m), 1) }, FixedUtcNow);
 
     private static ICurrentUser CreateCurrentUser()
     {

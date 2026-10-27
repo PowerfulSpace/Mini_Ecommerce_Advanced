@@ -9,23 +9,25 @@ public static class CartDtoBuilder
     {
         var productsById = products.ToDictionary(product => product.Id);
 
-        var itemDtos = cart.Items
-            .Select(item =>
-            {
-                var product = productsById[item.ProductId];
+        var itemDtos = new List<CartItemDto>(cart.Items.Count);
+        var totalAmount = Money.Zero;
 
-                return new CartItemDto(
-                    item.ProductId,
-                    product.Name,
-                    product.Price,
-                    item.Quantity,
-                    product.Price * item.Quantity,
-                    product.IsActive);
-            })
-            .ToList();
+        foreach (var item in cart.Items)
+        {
+            var product = productsById[item.ProductId];
+            var lineTotal = product.Price * item.Quantity;
 
-        var totalAmount = itemDtos.Sum(item => item.LineTotal);
+            itemDtos.Add(new CartItemDto(
+                item.ProductId,
+                product.Name,
+                product.Price.Amount,
+                item.Quantity,
+                lineTotal.Amount,
+                product.IsActive));
 
-        return new CartDto(itemDtos, totalAmount);
+            totalAmount += lineTotal;
+        }
+
+        return new CartDto(itemDtos, totalAmount.Amount);
     }
 }

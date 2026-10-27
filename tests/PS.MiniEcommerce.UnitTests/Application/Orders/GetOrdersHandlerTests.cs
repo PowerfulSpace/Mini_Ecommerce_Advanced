@@ -15,8 +15,8 @@ public class GetOrdersHandlerTests
     [Fact]
     public async Task Handle_WithOrders_ReturnsPaginatedSummaryDtos()
     {
-        var first = Order.Create(UserId, new[] { new OrderItemData(ProductA, "Widget", 19.99m, 1) }, FixedUtcNow);
-        var second = Order.Create(UserId, new[] { new OrderItemData(ProductA, "Gadget", 5.50m, 2) }, FixedUtcNow);
+        var first = Order.Create(UserId, new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(19.99m), 1) }, FixedUtcNow);
+        var second = Order.Create(UserId, new[] { new OrderItemData(ProductA, "Gadget", Money.FromDecimal(5.50m), 2) }, FixedUtcNow);
         IReadOnlyList<Order> items = new List<Order> { first, second };
 
         var repository = Substitute.For<IOrderRepository>();
@@ -36,12 +36,12 @@ public class GetOrdersHandlerTests
         Assert.Equal(first.Id, result.Items[0].Id);
         Assert.Equal("Created", result.Items[0].Status);
         Assert.Equal(first.CreatedAtUtc, result.Items[0].CreatedAtUtc);
-        Assert.Equal(first.TotalAmount, result.Items[0].TotalAmount);
+        Assert.Equal(first.TotalAmount.Amount, result.Items[0].TotalAmount);
 
         Assert.Equal(second.Id, result.Items[1].Id);
         Assert.Equal("Created", result.Items[1].Status);
         Assert.Equal(second.CreatedAtUtc, result.Items[1].CreatedAtUtc);
-        Assert.Equal(second.TotalAmount, result.Items[1].TotalAmount);
+        Assert.Equal(second.TotalAmount.Amount, result.Items[1].TotalAmount);
     }
 
     [Fact]

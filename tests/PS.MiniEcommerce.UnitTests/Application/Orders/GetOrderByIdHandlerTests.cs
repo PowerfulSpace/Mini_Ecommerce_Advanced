@@ -16,7 +16,7 @@ public class GetOrderByIdHandlerTests
     [Fact]
     public async Task Handle_WhenOrderExists_ReturnsOrderDto()
     {
-        var order = Order.Create(UserId, new[] { new OrderItemData(ProductA, "Widget", 19.99m, 3) }, FixedUtcNow);
+        var order = Order.Create(UserId, new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(19.99m), 3) }, FixedUtcNow);
 
         var repository = Substitute.For<IOrderRepository>();
         repository
@@ -30,7 +30,7 @@ public class GetOrderByIdHandlerTests
         Assert.Equal(order.Id, dto.Id);
         Assert.Equal("Created", dto.Status);
         Assert.Equal(order.CreatedAtUtc, dto.CreatedAtUtc);
-        Assert.Equal(order.TotalAmount, dto.TotalAmount);
+        Assert.Equal(order.TotalAmount.Amount, dto.TotalAmount);
         var item = Assert.Single(dto.Items);
         Assert.Equal(ProductA, item.ProductId);
         Assert.Equal(59.97m, item.LineTotal);

@@ -33,7 +33,7 @@ public class GetProductByIdQueryHandler : IRequestHandler<GetProductByIdQuery, P
             product.Id,
             product.Name,
             product.Description,
-            product.Price,
+            product.Price.Amount,
             product.StockQuantity);
     }
 }

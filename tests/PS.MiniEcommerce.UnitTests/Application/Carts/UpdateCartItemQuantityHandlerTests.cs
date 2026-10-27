@@ -21,7 +21,7 @@ public class UpdateCartItemQuantityHandlerTests
     public async Task Handle_WhenItemExists_UpdatesQuantity()
     {
         var cart = Cart.Create(UserId, FixedUtcNow);
-        var product = Product.Create("Wireless Mouse", "Description.", 10m, 10, FixedUtcNow);
+        var product = Product.Create("Wireless Mouse", "Description.", Money.FromDecimal(10m), 10, FixedUtcNow);
         cart.AddItem(product.Id, 2, FixedUtcNow);
         var handler = CreateHandler(cart, product);
 
@@ -39,7 +39,7 @@ public class UpdateCartItemQuantityHandlerTests
     public async Task Handle_WhenItemDoesNotExist_ThrowsNotFoundWithCartItemNotFound()
     {
         var cart = Cart.Create(UserId, FixedUtcNow);
-        var product = Product.Create("Wireless Mouse", "Description.", 10m, 10, FixedUtcNow);
+        var product = Product.Create("Wireless Mouse", "Description.", Money.FromDecimal(10m), 10, FixedUtcNow);
         var handler = CreateHandler(cart, product);
 
         var exception = await Assert.ThrowsAsync<NotFoundException>(
@@ -54,7 +54,7 @@ public class UpdateCartItemQuantityHandlerTests
     public async Task Handle_WhenProductInactive_ThrowsDomainConflictWithProductUnavailable()
     {
         var cart = Cart.Create(UserId, FixedUtcNow);
-        var product = Product.Create("Discontinued Tablet Case", "Description.", 10m, 10, FixedUtcNow);
+        var product = Product.Create("Discontinued Tablet Case", "Description.", Money.FromDecimal(10m), 10, FixedUtcNow);
         cart.AddItem(product.Id, 2, FixedUtcNow);
         product.Deactivate();
         var handler = CreateHandler(cart, product);
@@ -71,7 +71,7 @@ public class UpdateCartItemQuantityHandlerTests
     public async Task Handle_WhenQuantityExceedsStock_ThrowsDomainConflictWithInsufficientStock()
     {
         var cart = Cart.Create(UserId, FixedUtcNow);
-        var product = Product.Create("Limited Edition Mug", "Description.", 10m, 3, FixedUtcNow);
+        var product = Product.Create("Limited Edition Mug", "Description.", Money.FromDecimal(10m), 3, FixedUtcNow);
         cart.AddItem(product.Id, 1, FixedUtcNow);
         var handler = CreateHandler(cart, product);
 

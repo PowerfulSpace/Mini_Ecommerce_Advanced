@@ -12,8 +12,8 @@ public class GetProductsQueryHandlerTests
     [Fact]
     public async Task Handle_WithProducts_ReturnsPaginatedDtos()
     {
-        var first = Product.Create("Alpha", "First product.", 1.11m, 11, FixedUtcNow);
-        var second = Product.Create("Beta", "Second product.", 2.22m, 22, FixedUtcNow);
+        var first = Product.Create("Alpha", "First product.", Money.FromDecimal(1.11m), 11, FixedUtcNow);
+        var second = Product.Create("Beta", "Second product.", Money.FromDecimal(2.22m), 22, FixedUtcNow);
 
         IReadOnlyList<Product> items = new List<Product> { first, second };
 
@@ -34,13 +34,13 @@ public class GetProductsQueryHandlerTests
         Assert.Equal(first.Id, result.Items[0].Id);
         Assert.Equal(first.Name, result.Items[0].Name);
         Assert.Equal(first.Description, result.Items[0].Description);
-        Assert.Equal(first.Price, result.Items[0].Price);
+        Assert.Equal(first.Price.Amount, result.Items[0].Price);
         Assert.Equal(first.StockQuantity, result.Items[0].StockQuantity);
 
         Assert.Equal(second.Id, result.Items[1].Id);
         Assert.Equal(second.Name, result.Items[1].Name);
         Assert.Equal(second.Description, result.Items[1].Description);
-        Assert.Equal(second.Price, result.Items[1].Price);
+        Assert.Equal(second.Price.Amount, result.Items[1].Price);
         Assert.Equal(second.StockQuantity, result.Items[1].StockQuantity);
     }
 

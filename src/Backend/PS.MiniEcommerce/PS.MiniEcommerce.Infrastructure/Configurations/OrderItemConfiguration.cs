@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using PS.MiniEcommerce.Domain;
+using PS.MiniEcommerce.Infrastructure.Persistence;
 
 namespace PS.MiniEcommerce.Infrastructure.Configurations;
 
@@ -31,6 +32,7 @@ public class OrderItemConfiguration : IEntityTypeConfiguration<OrderItem>
 
         builder.Property(orderItem => orderItem.UnitPrice)
             .IsRequired()
+            .HasConversion(new MoneyValueConverter())
             .HasColumnType("decimal(18,2)");
 
         builder.Property(orderItem => orderItem.Quantity)
