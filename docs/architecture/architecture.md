@@ -523,8 +523,8 @@ src/Backend/PS.MiniEcommerce/PS.MiniEcommerce.Application/
 - Admin endpoints не регистрируются в Production и возвращают `404`.
 
 Механизм `X-Test-User` является Development-заглушкой, а не production
-аутентификацией. Полное обоснование будет вынесено в RATIONALE (документ будет
-создан позже); до этого см. `../DECISIONS.md`, §13.
+аутентификацией. Полное обоснование — см. `../../RATIONALE.md`; см. также
+`../DECISIONS.md`, §13.
 
 Абстракция текущего пользователя принадлежит Application. Её реализация во время
 выполнения и конфигурация аутентификации подключаются через композицию API.
@@ -761,7 +761,9 @@ SQL Server, rowversion, изоляции или поведения затрон�
 
 ## 13. Ограничения текущего этапа
 
-MVP+ является reference implementation и не содержит production-hardening:
+MVP+ (M1–M14) — целевая reference implementation; в работе. Документация MVP+
+завершена; код реализуется по этапам 12–19; текущий код — MVP. См.
+`../../RATIONALE.md`, `../ROADMAP.md`. MVP+ не содержит production-hardening:
 
 - Платёжный провайдер — mock; Stripe, реальные вебхуки и reconciliation не
   поддерживаются.

@@ -4,9 +4,9 @@
 
 ## Статус проекта
 
-**Статус:** MVP завершён, MVP+ (M1–M14) в работе. Границы объёма и осознанные упрощения — в `RATIONALE.md` (будет создан позже) и `docs/DECISIONS.md` §13.
+**Статус:** MVP завершён, MVP+ (M1–M14) в работе. Границы объёма и осознанные упрощения — в `RATIONALE.md` и `docs/DECISIONS.md` §13.
 
-Backend реализован по Clean Architecture (`PS.MiniEcommerce.Domain`, `.Application`, `.Infrastructure`, `.API`): каталог, корзина с выбором позиций, частичный checkout с резервами и идемпотентностью, mock-платежи, история заказов, полная и частичная отмена, admin API и аудит. Frontend на Vue 3 + TypeScript реализует каталог, карточку товара, корзину с `ETag`/`If-Match`, checkout с переиспользованием ключа идемпотентности, историю, детали и отмену заказа. Модульные, компонентные и интеграционные тесты покрывают бизнес-инварианты, транзакции, конкурентный доступ и идемпотентность. Последовательность этапов — в `docs/ROADMAP.md`.
+Backend реализован по Clean Architecture (`PS.MiniEcommerce.Domain`, `.Application`, `.Infrastructure`, `.API`). Текущий код соответствует MVP (каталог, корзина, checkout, заказы, отмена, идемпотентность). MVP+ (M1–M14) в работе: см. `docs/ROADMAP.md` этапы 12–19 и `RATIONALE.md`. Frontend на Vue 3 + TypeScript реализует каталог, карточку товара, корзину с `ETag`/`If-Match`, checkout с переиспользованием ключа идемпотентности, историю, детали и отмену заказа. Модульные, компонентные и интеграционные тесты покрывают бизнес-инварианты, транзакции, конкурентный доступ и идемпотентность. Последовательность этапов — в `docs/ROADMAP.md`.
 
 ## Цели проекта
 
@@ -119,7 +119,7 @@ MiniEcommerce/
 | `docs/DECISIONS.md` | Реестр принятых технических и архитектурных решений |
 | `docs/FRONTEND.md` | Требования и принципы организации frontend |
 | `docs/ROADMAP.md` | Этапы и последовательность реализации |
-| `RATIONALE.md` | Границы объёма и осознанные упрощения (будет создан позже) |
+| `RATIONALE.md` | Границы объёма и осознанные упрощения |
 | `docs/architecture/architecture.md` | Архитектура backend и ответственность слоёв |
 | `docs/architecture/data-model.md` | Модель данных и ограничения базы |
 | `docs/architecture/api.md` | HTTP API и контракты взаимодействия |
@@ -227,7 +227,7 @@ npm run lint       # oxlint + eslint
 
 ### Аутентификация в Development
 
-В окружении Development аутентификация выполняется заголовком `X-Test-User` со значениями `alice`, `bob` или `admin`. Механизм зарегистрирован только в Development и недоступен в Production; неизвестные значения не аутентифицируют запрос. `admin` получает роль admin только для Development admin endpoints; admin UI отсутствует. Во frontend identity выбирается в селекторе "dev identity" в шапке (`Header.vue`), который присутствует только в dev-сборке (`import.meta.env.DEV`). Подробности — в `docs/architecture/api.md` §2.1, `docs/FRONTEND.md` §4 и `RATIONALE.md` (будет создан позже).
+В окружении Development аутентификация выполняется заголовком `X-Test-User` со значениями `alice`, `bob` или `admin`. Механизм зарегистрирован только в Development и недоступен в Production; неизвестные значения не аутентифицируют запрос. `admin` получает роль admin только для Development admin endpoints; admin UI отсутствует. Во frontend identity выбирается в селекторе "dev identity" в шапке (`Header.vue`), который присутствует только в dev-сборке (`import.meta.env.DEV`). Подробности — в `docs/architecture/api.md` §2.1, `docs/FRONTEND.md` §4 и `RATIONALE.md`.
 
 ### Известные проблемы и зафиксированные отклонения
 

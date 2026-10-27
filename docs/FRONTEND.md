@@ -13,8 +13,8 @@ Mini E-commerce.
 покупки. Он не должен вводить функциональность за пределами утверждённого
 объёма MVP+.
 
-Границы объёма и осознанные упрощения определены в `RATIONALE.md` (будет создан
-позже) и `DECISIONS.md`, §13.
+Границы объёма и осознанные упрощения определены в `../RATIONALE.md` и
+`DECISIONS.md`, §13.
 
 ## 2. Технологический стек
 
@@ -720,7 +720,7 @@ Backend остаётся авторитетным источником для т
 - `SPEC.md`
 - `DOMAIN.md`
 - `DECISIONS.md`
-- `RATIONALE.md` (будет создан позже)
+- `../RATIONALE.md`
 - `ROADMAP.md`
 - `architecture/architecture.md`
 - `architecture/data-model.md`

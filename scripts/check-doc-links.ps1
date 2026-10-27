@@ -126,6 +126,13 @@ function Get-LineReferences {
         if ([string]::IsNullOrWhiteSpace($pathPart)) { continue }
         if ($pathPart -match '^(https?://|mailto:|#|//)') { continue }
 
+        # Ellipsis ranges (e.g. ADR-003…ADR-010) are documentation shorthand,
+        # not filesystem paths.
+        if ($pathPart -match '\.\.\.' -or $pathPart.IndexOf([char]0x2026) -ge 0) {
+            $skipped++
+            continue
+        }
+
         $results.Add([pscustomobject]@{
             Source   = 'inline'
             Category = 'doc-link'
@@ -143,6 +150,13 @@ function Get-LineReferences {
         if ([string]::IsNullOrWhiteSpace($span)) { continue }
         if ($span -match '\s') { $skipped++; continue }
         if ($span -match '^(https?://|mailto:)') { $skipped++; continue }
+
+        # Ellipsis ranges (e.g. ADR-003…ADR-010) are documentation shorthand,
+        # not filesystem paths.
+        if ($span -match '\.\.\.' -or $span.IndexOf([char]0x2026) -ge 0) {
+            $skipped++
+            continue
+        }
 
         # Skip non-path artifacts entirely; they are not resolved and not counted.
         if (Test-MimeType -Span $span) { $skipped++; continue }
