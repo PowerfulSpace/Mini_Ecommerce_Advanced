@@ -37,7 +37,7 @@ public sealed class TestDatabaseFixture : IAsyncLifetime
 
         _respawner = await Respawner.CreateAsync(connection, new RespawnerOptions
         {
-            TablesToIgnore = new[] { new Table("__EFMigrationsHistory") },
+            TablesToIgnore = new[] { new Table("__EFMigrationsHistory"), new Table("AuditLogs") },
             DbAdapter = DbAdapter.SqlServer
         });
 
@@ -50,6 +50,8 @@ public sealed class TestDatabaseFixture : IAsyncLifetime
         {
             var connection = context.Database.GetDbConnection();
             await connection.OpenAsync();
+
+            await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE [AuditLogs];");
 
             await _respawner.ResetAsync(connection);
         }

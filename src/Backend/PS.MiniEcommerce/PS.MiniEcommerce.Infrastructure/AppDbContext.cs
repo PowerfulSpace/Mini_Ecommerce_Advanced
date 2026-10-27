@@ -27,6 +27,8 @@ public class AppDbContext : DbContext
 
     public DbSet<CheckoutAttempt> CheckoutAttempts => Set<CheckoutAttempt>();
 
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
         configurationBuilder

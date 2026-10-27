@@ -31,6 +31,8 @@ public static class DependencyInjection
 
         services.AddScoped<ICheckoutAttemptRepository, CheckoutAttemptRepository>();
 
+        services.AddScoped<IAuditLogRepository, AuditLogRepository>();
+
         services.AddScoped<ICheckoutTransactionExecutor, CheckoutTransactionExecutor>();
 
         return services;
