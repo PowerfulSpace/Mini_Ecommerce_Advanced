@@ -6,7 +6,7 @@ using PS.MiniEcommerce.Application.Orders.DTOs;
 
 namespace PS.MiniEcommerce.Application.Orders.Queries;
 
-public class GetOrderByIdHandler : IRequestHandler<GetOrderByIdQuery, OrderDto>
+public class GetOrderByIdHandler : IRequestHandler<GetOrderByIdQuery, OrderDetailsResult>
 {
     private readonly IOrderRepository _orderRepository;
     private readonly ICurrentUser _currentUser;
@@ -17,22 +17,24 @@ public class GetOrderByIdHandler : IRequestHandler<GetOrderByIdQuery, OrderDto>
         _currentUser = currentUser;
     }
 
-    public async Task<OrderDto> Handle(GetOrderByIdQuery request, CancellationToken cancellationToken)
+    public async Task<OrderDetailsResult> Handle(
+        GetOrderByIdQuery request,
+        CancellationToken cancellationToken)
     {
         var userId = _currentUser.UserId;
 
-        var order = await _orderRepository.GetByIdWithItemsAsync(
+        var (order, rowVersion) = await _orderRepository.GetByIdWithItemsAsync(
             request.OrderId,
             userId,
             cancellationToken);
 
-        if (order is null)
+        if (order is null || rowVersion is null)
         {
             throw new NotFoundException(
                 $"Order with id {request.OrderId} was not found.",
                 "order_not_found");
         }
 
-        return order.ToDto();
+        return new OrderDetailsResult(order.ToDto(), rowVersion);
     }
 }

@@ -38,6 +38,16 @@ public class OrderItemConfiguration : IEntityTypeConfiguration<OrderItem>
         builder.Property(orderItem => orderItem.Quantity)
             .IsRequired();
 
+        builder.Ignore(orderItem => orderItem.CancelledQuantity);
+
+        builder.HasMany(orderItem => orderItem.Cancellations)
+            .WithOne()
+            .HasForeignKey(cancellation => cancellation.OrderItemId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.Navigation(orderItem => orderItem.Cancellations)
+            .UsePropertyAccessMode(PropertyAccessMode.Field);
+
         builder.HasOne<Product>()
             .WithMany()
             .HasForeignKey(orderItem => orderItem.ProductId)

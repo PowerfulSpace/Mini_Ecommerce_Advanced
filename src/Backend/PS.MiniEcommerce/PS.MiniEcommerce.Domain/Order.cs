@@ -92,20 +92,81 @@ public class Order
 
     public void Cancel()
     {
-        if (Status != OrderStatus.Created && Status != OrderStatus.Paid)
+        Cancel(DateTime.UtcNow);
+    }
+
+    public void Cancel(DateTime utcNow)
+    {
+        var remainingItems = _items
+            .Select(item => (item.Id, item.Quantity - item.CancelledQuantity))
+            .Where(item => item.Item2 > 0)
+            .ToList();
+
+        CancelItems(remainingItems, utcNow);
+    }
+
+    public void CancelItems(
+        IReadOnlyList<(Guid OrderItemId, int Quantity)> items,
+        DateTime utcNow,
+        string? reason = null)
+    {
+        EnsureCancellable();
+
+        if (items is null)
         {
-            throw new DomainConflictException(
-                $"Cannot transition order from '{Status}' to '{OrderStatus.Cancelled}'.",
-                "invalid_order_transition");
+            throw new DomainValidationException("Cancellation items must not be null.");
         }
 
-        Status = OrderStatus.Cancelled;
+        if (items.Count == 0)
+        {
+            throw new DomainValidationException("Cancellation items must not be empty.");
+        }
+
+        if (items.Select(item => item.OrderItemId).Distinct().Count() != items.Count)
+        {
+            throw new DomainValidationException("Cancellation items must not contain duplicate order item ids.");
+        }
+
+        var targets = new List<(OrderItem Item, int Quantity)>(items.Count);
+
+        foreach (var cancellation in items)
+        {
+            var item = _items.FirstOrDefault(orderItem => orderItem.Id == cancellation.OrderItemId);
+
+            if (item is null)
+            {
+                throw new DomainValidationException(
+                    $"Order item with id {cancellation.OrderItemId} was not found in the order.");
+            }
+
+            targets.Add((item, cancellation.Quantity));
+        }
+
+        foreach (var target in targets)
+        {
+            target.Item.AddCancellation(target.Quantity, utcNow, reason);
+        }
+
+        if (_items.All(item => item.CancelledQuantity == item.Quantity))
+        {
+            Status = OrderStatus.Cancelled;
+        }
     }
 
     public void Return()
     {
         EnsureTransition(OrderStatus.Delivered, OrderStatus.Returned);
         Status = OrderStatus.Returned;
+    }
+
+    private void EnsureCancellable()
+    {
+        if (Status != OrderStatus.Created && Status != OrderStatus.Paid)
+        {
+            throw new DomainConflictException(
+                $"Cannot transition order from '{Status}' to '{OrderStatus.Cancelled}'.",
+                "invalid_order_transition");
+        }
     }
 
     private void EnsureTransition(OrderStatus expected, OrderStatus requested)

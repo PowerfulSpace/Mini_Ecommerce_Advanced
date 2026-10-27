@@ -5,4 +5,4 @@ public sealed record CheckoutExecutionResult(
     int ResponseStatusCode,
     string ResponsePayload,
     Guid? OrderId,
-    byte[]? NewCartRowVersion);
+    byte[]? NewOrderRowVersion);

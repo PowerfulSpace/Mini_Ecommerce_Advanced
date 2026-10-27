@@ -13,15 +13,18 @@ public class CheckoutHandler : IRequestHandler<CheckoutCommand, CheckoutExecutio
 
     private readonly ICheckoutAttemptRepository _checkoutAttemptRepository;
     private readonly ICheckoutTransactionExecutor _checkoutTransactionExecutor;
+    private readonly IOrderRepository _orderRepository;
     private readonly ICurrentUser _currentUser;
 
     public CheckoutHandler(
         ICheckoutAttemptRepository checkoutAttemptRepository,
         ICheckoutTransactionExecutor checkoutTransactionExecutor,
+        IOrderRepository orderRepository,
         ICurrentUser currentUser)
     {
         _checkoutAttemptRepository = checkoutAttemptRepository;
         _checkoutTransactionExecutor = checkoutTransactionExecutor;
+        _orderRepository = orderRepository;
         _currentUser = currentUser;
     }
 
@@ -104,7 +107,7 @@ public class CheckoutHandler : IRequestHandler<CheckoutCommand, CheckoutExecutio
 
             if (completed is not null)
             {
-                return BuildReplayResult(completed);
+                return await BuildReplayResultAsync(completed, cancellationToken);
             }
 
             var utcNow = DateTime.UtcNow;
@@ -142,7 +145,7 @@ public class CheckoutHandler : IRequestHandler<CheckoutCommand, CheckoutExecutio
 
             if (durableState.State == CheckoutAttemptState.Completed)
             {
-                return BuildReplayResult(durableState);
+                return await BuildReplayResultAsync(durableState, cancellationToken);
             }
 
             if (durableState.OrderId is not null)
@@ -159,13 +162,27 @@ public class CheckoutHandler : IRequestHandler<CheckoutCommand, CheckoutExecutio
                 cancellationToken);
         }
 
-        return BuildReplayResult(attempt);
+        return await BuildReplayResultAsync(attempt, cancellationToken);
     }
 
-    private static CheckoutExecutionResult BuildReplayResult(CheckoutAttemptData attempt) => new(
-        Success: attempt.ResponseStatusCode == 201,
-        ResponseStatusCode: attempt.ResponseStatusCode!.Value,
-        ResponsePayload: attempt.ResponsePayload!,
-        OrderId: null,
-        NewCartRowVersion: null);
+    private async Task<CheckoutExecutionResult> BuildReplayResultAsync(
+        CheckoutAttemptData attempt,
+        CancellationToken cancellationToken)
+    {
+        byte[]? orderRowVersion = null;
+
+        if (attempt.ResponseStatusCode == 201 && attempt.OrderId is not null)
+        {
+            orderRowVersion = await _orderRepository.GetRowVersionAsync(
+                attempt.OrderId.Value,
+                cancellationToken);
+        }
+
+        return new CheckoutExecutionResult(
+            Success: attempt.ResponseStatusCode == 201,
+            ResponseStatusCode: attempt.ResponseStatusCode!.Value,
+            ResponsePayload: attempt.ResponsePayload!,
+            OrderId: null,
+            NewOrderRowVersion: orderRowVersion);
+    }
 }

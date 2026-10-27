@@ -140,14 +140,20 @@ public class OrdersEndpointTests : IAsyncLifetime
         var response = await GetOrderByIdAsync(Alice, orderId);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(response.Headers.ETag);
         var order = await response.Content.ReadFromJsonAsync<OrderDetailResponse>();
         Assert.NotNull(order);
         Assert.Equal(orderId, order.Id);
         Assert.Equal("Created", order.Status);
 
+        var repeated = await GetOrderByIdAsync(Alice, orderId);
+        Assert.Equal(HttpStatusCode.OK, repeated.StatusCode);
+        Assert.Equal(response.Headers.ETag, repeated.Headers.ETag);
+
         var item = Assert.Single(order.Items);
         Assert.Equal(WirelessMouse, item.ProductName);
         Assert.Equal(2, item.Quantity);
+        Assert.Equal(0, item.CancelledQuantity);
         Assert.Equal(item.UnitPrice * item.Quantity, item.LineTotal);
     }
 
@@ -251,7 +257,7 @@ public class OrdersEndpointTests : IAsyncLifetime
 
     private sealed record OrderDetailResponse(Guid Id, string Status, DateTime CreatedAtUtc, decimal TotalAmount, List<OrderItemResponse> Items);
 
-    private sealed record OrderItemResponse(Guid ProductId, string ProductName, decimal UnitPrice, int Quantity, decimal LineTotal);
+    private sealed record OrderItemResponse(Guid OrderItemId, Guid ProductId, string ProductName, decimal UnitPrice, int Quantity, int CancelledQuantity, decimal LineTotal);
 
     private sealed record ErrorResponse(string Code);
 }

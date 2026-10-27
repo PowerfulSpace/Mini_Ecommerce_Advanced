@@ -11,10 +11,12 @@ public static class OrderDtoMapping
         order.TotalAmount.Amount,
         order.Items
             .Select(item => new OrderItemDto(
+                item.Id,
                 item.ProductId,
                 item.ProductName,
                 item.UnitPrice.Amount,
                 item.Quantity,
+                item.CancelledQuantity,
                 (item.UnitPrice * item.Quantity).Amount))
             .ToList());
 

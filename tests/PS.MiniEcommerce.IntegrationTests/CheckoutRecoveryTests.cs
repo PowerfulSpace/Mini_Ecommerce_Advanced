@@ -243,7 +243,8 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         var body2 = await second.Content.ReadAsStringAsync();
         Assert.Equal(body1, body2);
         Assert.Null(second.Headers.Location);
-        Assert.Null(second.Headers.ETag);
+        Assert.NotNull(second.Headers.ETag);
+        Assert.Equal(first.Headers.ETag, second.Headers.ETag);
 
         Assert.Equal(1, await GetOrdersCountAsync());
         Assert.Single(await GetAliceCartItemsAsync());

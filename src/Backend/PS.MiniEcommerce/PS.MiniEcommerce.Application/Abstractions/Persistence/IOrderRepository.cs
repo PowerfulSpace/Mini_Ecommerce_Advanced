@@ -10,14 +10,18 @@ public interface IOrderRepository
         int pageSize,
         CancellationToken cancellationToken);
 
-    Task<Order?> GetByIdWithItemsAsync(
+    Task<(Order? Order, byte[]? RowVersion)> GetByIdWithItemsAsync(
         Guid orderId,
         Guid userId,
         CancellationToken cancellationToken);
 
-    Task<(CancelOrderResult Result, Order? Order, OrderStatus? CurrentStatus)> CancelAsync(
+    Task<byte[]?> GetRowVersionAsync(Guid orderId, CancellationToken cancellationToken);
+
+    Task<(CancelOrderResult Result, Order? Order, OrderStatus? CurrentStatus, byte[]? NewRowVersion)> CancelAsync(
         Guid orderId,
         Guid userId,
+        string ifMatch,
+        IReadOnlyList<(Guid OrderItemId, int Quantity)>? items,
         CancellationToken cancellationToken);
 
     Task ConsumeReservedAsync(Guid orderId, CancellationToken cancellationToken);

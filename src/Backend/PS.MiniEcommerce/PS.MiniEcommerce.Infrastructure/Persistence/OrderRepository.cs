@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
+using PS.MiniEcommerce.Application.Orders;
 using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Domain.Exceptions;
 
@@ -42,83 +43,117 @@ public class OrderRepository : IOrderRepository
         return (items, totalCount);
     }
 
-    public async Task<Order?> GetByIdWithItemsAsync(
+    public async Task<(Order? Order, byte[]? RowVersion)> GetByIdWithItemsAsync(
         Guid orderId,
         Guid userId,
         CancellationToken cancellationToken)
     {
-        return await _dbContext.Orders
-            .AsNoTracking()
+        var order = await _dbContext.Orders
             .Include(order => order.Items)
+            .ThenInclude(item => item.Cancellations)
             .FirstOrDefaultAsync(
                 order => order.Id == orderId && order.UserId == userId,
                 cancellationToken);
+
+        if (order is null)
+        {
+            return (null, null);
+        }
+
+        var rowVersion = _dbContext.Entry(order).Property<byte[]>("RowVersion").CurrentValue;
+
+        return (order, rowVersion);
     }
 
-    public async Task<(CancelOrderResult Result, Order? Order, OrderStatus? CurrentStatus)> CancelAsync(
+    public async Task<byte[]?> GetRowVersionAsync(Guid orderId, CancellationToken cancellationToken)
+    {
+        return await _dbContext.Orders
+            .AsNoTracking()
+            .Where(order => order.Id == orderId)
+            .Select(order => EF.Property<byte[]>(order, "RowVersion"))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<(CancelOrderResult Result, Order? Order, OrderStatus? CurrentStatus, byte[]? NewRowVersion)> CancelAsync(
         Guid orderId,
         Guid userId,
+        string ifMatch,
+        IReadOnlyList<(Guid OrderItemId, int Quantity)>? items,
         CancellationToken cancellationToken)
     {
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
 
-        var stockAction = CancellationStockAction.None;
+        var order = await _dbContext.Orders
+            .FromSqlInterpolated(
+                $"SELECT * FROM Orders WITH (UPDLOCK) WHERE Id = {orderId} AND UserId = {userId}")
+            .Include(order => order.Items)
+            .ThenInclude(item => item.Cancellations)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        var affected = await _dbContext.Orders
-            .Where(order =>
-                order.Id == orderId
-                && order.UserId == userId
-                && order.Status == OrderStatus.Created)
-            .ExecuteUpdateAsync(
-                setters => setters.SetProperty(order => order.Status, OrderStatus.Cancelled),
-                cancellationToken);
-
-        if (affected > 0)
+        if (order is null)
         {
-            stockAction = CancellationStockAction.ReleaseReservation;
+            await transaction.RollbackAsync(cancellationToken);
+            return (CancelOrderResult.NotFound, null, null, null);
+        }
+
+        var currentRowVersion = _dbContext.Entry(order).Property<byte[]>("RowVersion").CurrentValue;
+        OrderVersionGuard.Validate(ifMatch, currentRowVersion);
+
+        var currentStatus = order.Status;
+
+        if (currentStatus == OrderStatus.Cancelled)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return (CancelOrderResult.AlreadyCancelled, null, currentStatus, null);
+        }
+
+        if (currentStatus != OrderStatus.Created && currentStatus != OrderStatus.Paid)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return (CancelOrderResult.InvalidTransition, null, currentStatus, null);
+        }
+
+        var utcNow = DateTime.UtcNow;
+        var stockQuantities = new Dictionary<Guid, int>();
+
+        if (items is null)
+        {
+            foreach (var item in order.Items)
+            {
+                var remainingQuantity = item.Quantity - item.CancelledQuantity;
+                if (remainingQuantity > 0)
+                {
+                    AddStockQuantity(stockQuantities, item.ProductId, remainingQuantity);
+                }
+            }
+
+            order.Cancel(utcNow);
         }
         else
         {
-            affected = await _dbContext.Orders
-                .Where(order =>
-                    order.Id == orderId
-                    && order.UserId == userId
-                    && order.Status == OrderStatus.Paid)
-                .ExecuteUpdateAsync(
-                    setters => setters.SetProperty(order => order.Status, OrderStatus.Cancelled),
-                    cancellationToken);
-
-            if (affected > 0)
+            foreach (var cancellation in items)
             {
-                stockAction = CancellationStockAction.RestoreAvailable;
+                var orderItem = order.Items.FirstOrDefault(item => item.Id == cancellation.OrderItemId);
+
+                if (orderItem is null)
+                {
+                    throw new DomainValidationException(
+                        $"Order item with id {cancellation.OrderItemId} was not found in the order.");
+                }
+
+                AddStockQuantity(stockQuantities, orderItem.ProductId, cancellation.Quantity);
             }
+
+            order.CancelItems(items, utcNow);
         }
 
-        if (affected == 0)
-        {
-            var existingStatus = await _dbContext.Orders
-                .AsNoTracking()
-                .Where(order => order.Id == orderId && order.UserId == userId)
-                .Select(order => (OrderStatus?)order.Status)
-                .FirstOrDefaultAsync(cancellationToken);
+        var stockAction = currentStatus == OrderStatus.Created
+            ? CancellationStockAction.ReleaseReservation
+            : CancellationStockAction.RestoreAvailable;
 
-            await transaction.RollbackAsync(cancellationToken);
-
-            if (existingStatus is null)
-            {
-                return (CancelOrderResult.NotFound, null, null);
-            }
-
-            if (existingStatus == OrderStatus.Cancelled)
-            {
-                return (CancelOrderResult.AlreadyCancelled, null, existingStatus);
-            }
-
-            return (CancelOrderResult.InvalidTransition, null, existingStatus);
-        }
-
-        if (stockAction != CancellationStockAction.None
-            && !await TryAdjustStockForCancellationAsync(orderId, stockAction, cancellationToken))
+        // Paid -> Cancelled does not trigger a refund here; stage 19 (ADR-008) will connect refunds.
+        if (stockQuantities.Count > 0
+            && !await TryAdjustStockForCancellationAsync(stockQuantities, stockAction, cancellationToken))
         {
             await transaction.RollbackAsync(cancellationToken);
             throw new DomainConflictException(
@@ -126,16 +161,21 @@ public class OrderRepository : IOrderRepository
                 "conflict");
         }
 
+        _dbContext.Entry(order).Property(entry => entry.Status).IsModified = true;
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        var newRowVersion = await _dbContext.Orders
+            .AsNoTracking()
+            .Where(order => order.Id == orderId)
+            .Select(order => EF.Property<byte[]>(order, "RowVersion"))
+            .FirstAsync(cancellationToken);
+
         await transaction.CommitAsync(cancellationToken);
 
         _dbContext.ChangeTracker.Clear();
 
-        var cancelledOrder = await _dbContext.Orders
-            .AsNoTracking()
-            .Include(order => order.Items)
-            .FirstAsync(order => order.Id == orderId, cancellationToken);
-
-        return (CancelOrderResult.Success, cancelledOrder, OrderStatus.Cancelled);
+        return (CancelOrderResult.Success, order, currentStatus, newRowVersion);
     }
 
     public async Task ConsumeReservedAsync(Guid orderId, CancellationToken cancellationToken)
@@ -173,38 +213,32 @@ public class OrderRepository : IOrderRepository
     }
 
     private async Task<bool> TryAdjustStockForCancellationAsync(
-        Guid orderId,
+        IReadOnlyDictionary<Guid, int> quantities,
         CancellationStockAction stockAction,
         CancellationToken cancellationToken)
     {
-        var orderItems = await _dbContext.OrderItems
-            .AsNoTracking()
-            .Where(item => item.OrderId == orderId)
-            .OrderBy(item => item.ProductId)
-            .ToListAsync(cancellationToken);
-
-        foreach (var item in orderItems)
+        foreach (var (productId, quantity) in quantities.OrderBy(pair => pair.Key))
         {
             var affected = stockAction == CancellationStockAction.ReleaseReservation
                 ? await _dbContext.Products
                     .Where(product =>
-                        product.Id == item.ProductId
-                        && product.Reserved >= item.Quantity)
+                        product.Id == productId
+                        && product.Reserved >= quantity)
                     .ExecuteUpdateAsync(
                         setters => setters
                             .SetProperty(
                                 product => product.Reserved,
-                                product => product.Reserved - item.Quantity)
+                                product => product.Reserved - quantity)
                             .SetProperty(
                                 product => product.Available,
-                                product => product.Available + item.Quantity),
+                                product => product.Available + quantity),
                         cancellationToken)
                 : await _dbContext.Products
-                    .Where(product => product.Id == item.ProductId)
+                    .Where(product => product.Id == productId)
                     .ExecuteUpdateAsync(
                         setters => setters.SetProperty(
                             product => product.Available,
-                            product => product.Available + item.Quantity),
+                            product => product.Available + quantity),
                         cancellationToken);
 
             if (affected == 0)
@@ -214,5 +248,14 @@ public class OrderRepository : IOrderRepository
         }
 
         return true;
+    }
+
+    private static void AddStockQuantity(
+        IDictionary<Guid, int> quantities,
+        Guid productId,
+        int quantity)
+    {
+        quantities.TryGetValue(productId, out var existingQuantity);
+        quantities[productId] = existingQuantity + quantity;
     }
 }

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Infrastructure;
@@ -13,6 +14,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
     private const string Alice = "alice";
     private const string Bob = "bob";
     private const string WirelessMouse = "Wireless Mouse";
+    private const string ValidIfMatch = "\"AQIDBAUGBwg=\"";
 
     private readonly TestDatabaseFixture _fixture;
     private readonly CustomWebApplicationFactory _factory;
@@ -35,7 +37,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task CancelOrder_WhenEligible_ReturnsCancelledOrder()
+    public async Task CancelOrder_WhenEligible_ReturnsCancelledOrderWithETag()
     {
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
         var stockAfterCheckout = await GetStockAsync(WirelessMouse);
@@ -43,10 +45,13 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         var response = await CancelAsync(Alice, orderId);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(response.Headers.ETag);
         var order = await response.Content.ReadFromJsonAsync<OrderDetailResponse>();
         Assert.NotNull(order);
         Assert.Equal(orderId, order.Id);
         Assert.Equal("Cancelled", order.Status);
+        var item = Assert.Single(order.Items);
+        Assert.Equal(2, item.CancelledQuantity);
 
         Assert.Equal(OrderStatus.Cancelled, await GetOrderStatusAsync(orderId));
         var stockAfterCancel = await GetStockAsync(WirelessMouse);
@@ -76,8 +81,9 @@ public class OrderCancelEndpointTests : IAsyncLifetime
     public async Task CancelOrder_WhenOrderBelongsToAnotherUser_Returns404()
     {
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+        var etag = await GetOrderETagAsync(Alice, orderId);
 
-        var response = await CancelAsync(Bob, orderId);
+        var response = await SendCancelAsync(Bob, orderId, etag);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
@@ -88,7 +94,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
     [Fact]
     public async Task CancelOrder_WhenOrderDoesNotExist_Returns404()
     {
-        var response = await CancelAsync(Alice, Guid.NewGuid());
+        var response = await SendCancelAsync(Alice, Guid.NewGuid(), ValidIfMatch);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
@@ -111,27 +117,140 @@ public class OrderCancelEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task CancelOrder_ConcurrentCancellations_OneSucceedsOneConflicts()
+    public async Task CancelOrder_WithoutIfMatch_Returns428PreconditionRequired()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+
+        var response = await SendCancelAsync(Alice, orderId, ifMatch: null);
+
+        Assert.Equal(HttpStatusCode.PreconditionRequired, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("precondition_required", error.Code);
+    }
+
+    [Fact]
+    public async Task CancelOrder_WithWildcardIfMatch_Returns400ValidationError()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+
+        var response = await SendCancelAsync(Alice, orderId, "*");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("validation_error", error.Code);
+    }
+
+    [Fact]
+    public async Task CancelOrder_WithInvalidIfMatch_Returns400ValidationError()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+
+        var response = await SendCancelAsync(Alice, orderId, "\"not-base64\"");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("validation_error", error.Code);
+    }
+
+    [Fact]
+    public async Task CancelOrder_WithStaleIfMatch_Returns412OrderVersionConflict()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+        var staleEtag = await GetOrderETagAsync(Alice, orderId);
+        await SetStatusAsync(orderId, OrderStatus.Created);
+        var stockBeforeCancel = await GetStockAsync(WirelessMouse);
+
+        var response = await SendCancelAsync(Alice, orderId, staleEtag);
+
+        Assert.Equal(HttpStatusCode.PreconditionFailed, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("order_version_conflict", error.Code);
+
+        Assert.Equal(OrderStatus.Created, await GetOrderStatusAsync(orderId));
+        Assert.Equal(stockBeforeCancel, await GetStockAsync(WirelessMouse));
+    }
+
+    [Fact]
+    public async Task CancelOrder_ConcurrentCancellationsWithSameETag_OneSucceedsOneConflicts()
     {
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
+        var etag = await GetOrderETagAsync(Alice, orderId);
         var stockAfterCheckout = await GetStockAsync(WirelessMouse);
 
         var tasks = new[]
         {
-            Task.Run(() => CancelAsync(Alice, orderId)),
-            Task.Run(() => CancelAsync(Alice, orderId))
+            Task.Run(() => SendCancelAsync(Alice, orderId, etag)),
+            Task.Run(() => SendCancelAsync(Alice, orderId, etag))
         };
 
         var responses = await Task.WhenAll(tasks);
         var statuses = responses.Select(response => response.StatusCode).ToList();
 
         Assert.Equal(1, statuses.Count(status => status == HttpStatusCode.OK));
-        Assert.Equal(1, statuses.Count(status => status == HttpStatusCode.Conflict));
+        var conflict = Assert.Single(
+            responses,
+            response => response.StatusCode == HttpStatusCode.PreconditionFailed);
+        var error = await conflict.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("order_version_conflict", error.Code);
 
         Assert.Equal(OrderStatus.Cancelled, await GetOrderStatusAsync(orderId));
         var stockAfterCancel = await GetStockAsync(WirelessMouse);
         Assert.Equal(stockAfterCheckout.Available + 2, stockAfterCancel.Available);
         Assert.Equal(0, stockAfterCancel.Reserved);
+    }
+
+    [Fact]
+    public async Task CancelOrder_ConcurrentPartialAndFullCancellationsWithSameETag_AreSerialized()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
+        var etag = await GetOrderETagAsync(Alice, orderId);
+        var order = await GetOrderAsync(Alice, orderId);
+        var item = Assert.Single(order.Items);
+        var stockAfterCheckout = await GetStockAsync(WirelessMouse);
+
+        var partialBody = new
+        {
+            items = new[]
+            {
+                new { orderItemId = item.OrderItemId, quantity = 1 }
+            }
+        };
+
+        var responses = await Task.WhenAll(
+            Task.Run(() => SendCancelAsync(Alice, orderId, etag, partialBody)),
+            Task.Run(() => SendCancelAsync(Alice, orderId, etag)));
+
+        Assert.Single(responses, response => response.StatusCode == HttpStatusCode.OK);
+        var conflict = Assert.Single(
+            responses,
+            response => response.StatusCode == HttpStatusCode.PreconditionFailed);
+        var error = await conflict.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("order_version_conflict", error.Code);
+
+        var status = await GetOrderStatusAsync(orderId);
+        var stockAfterCancel = await GetStockAsync(WirelessMouse);
+
+        if (status == OrderStatus.Cancelled)
+        {
+            Assert.Equal(stockAfterCheckout.Available + 2, stockAfterCancel.Available);
+            Assert.Equal(0, stockAfterCancel.Reserved);
+            var cancelled = await GetOrderAsync(Alice, orderId);
+            Assert.Equal(2, Assert.Single(cancelled.Items).CancelledQuantity);
+        }
+        else
+        {
+            Assert.Equal(OrderStatus.Created, status);
+            Assert.Equal(stockAfterCheckout.Available + 1, stockAfterCancel.Available);
+            Assert.Equal(1, stockAfterCancel.Reserved);
+            var partiallyCancelled = await GetOrderAsync(Alice, orderId);
+            Assert.Equal(1, Assert.Single(partiallyCancelled.Items).CancelledQuantity);
+        }
     }
 
     [Fact]
@@ -153,6 +272,186 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         var stockAfterCancel = await GetStockAsync(WirelessMouse);
         Assert.Equal(stockAfterCheckout.Available + 2, stockAfterCancel.Available);
         Assert.Equal(stockAfterCheckout.Reserved, stockAfterCancel.Reserved);
+    }
+
+    [Fact]
+    public async Task CancelOrder_PartialCancellationOnPaid_RestoresAvailableOnly()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
+        var stockAfterCheckout = await GetStockAsync(WirelessMouse);
+        await SetStatusAsync(orderId, OrderStatus.Paid, Guid.NewGuid());
+        var etag = await GetOrderETagAsync(Alice, orderId);
+        var order = await GetOrderAsync(Alice, orderId);
+        var item = Assert.Single(order.Items);
+
+        var response = await SendCancelAsync(
+            Alice,
+            orderId,
+            etag,
+            new
+            {
+                items = new[]
+                {
+                    new { orderItemId = item.OrderItemId, quantity = 1 }
+                }
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var updated = await response.Content.ReadFromJsonAsync<OrderDetailResponse>();
+        Assert.NotNull(updated);
+        Assert.Equal("Paid", updated.Status);
+        Assert.Equal(1, Assert.Single(updated.Items).CancelledQuantity);
+
+        var stockAfterCancel = await GetStockAsync(WirelessMouse);
+        Assert.Equal(stockAfterCheckout.Available + 1, stockAfterCancel.Available);
+        Assert.Equal(stockAfterCheckout.Reserved, stockAfterCancel.Reserved);
+    }
+
+    [Fact]
+    public async Task CancelOrder_PartialCancellation_UpdatesCancelledQuantityAndStockAndETag()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
+        var stockAfterCheckout = await GetStockAsync(WirelessMouse);
+        var initialEtag = await GetOrderETagAsync(Alice, orderId);
+        var initialOrder = await GetOrderAsync(Alice, orderId);
+        var item = Assert.Single(initialOrder.Items);
+
+        var partial = await SendCancelAsync(
+            Alice,
+            orderId,
+            initialEtag,
+            new
+            {
+                items = new[]
+                {
+                    new { orderItemId = item.OrderItemId, quantity = 1 }
+                }
+            });
+
+        Assert.Equal(HttpStatusCode.OK, partial.StatusCode);
+        Assert.NotNull(partial.Headers.ETag);
+        Assert.NotEqual(initialEtag, partial.Headers.ETag!.Tag);
+        var partialOrder = await partial.Content.ReadFromJsonAsync<OrderDetailResponse>();
+        Assert.NotNull(partialOrder);
+        Assert.Equal("Created", partialOrder.Status);
+        var partialItem = Assert.Single(partialOrder.Items);
+        Assert.Equal(1, partialItem.CancelledQuantity);
+
+        var stockAfterPartial = await GetStockAsync(WirelessMouse);
+        Assert.Equal(stockAfterCheckout.Available + 1, stockAfterPartial.Available);
+        Assert.Equal(1, stockAfterPartial.Reserved);
+
+        var afterPartial = await GetOrderByIdResponseAsync(Alice, orderId);
+        Assert.Equal(partial.Headers.ETag, afterPartial.Headers.ETag);
+        var refreshed = await afterPartial.Content.ReadFromJsonAsync<OrderDetailResponse>();
+        Assert.NotNull(refreshed);
+        Assert.Equal(1, Assert.Single(refreshed.Items).CancelledQuantity);
+
+        var final = await SendCancelAsync(Alice, orderId, partial.Headers.ETag!.Tag);
+
+        Assert.Equal(HttpStatusCode.OK, final.StatusCode);
+        var finalOrder = await final.Content.ReadFromJsonAsync<OrderDetailResponse>();
+        Assert.NotNull(finalOrder);
+        Assert.Equal("Cancelled", finalOrder.Status);
+        Assert.Equal(2, Assert.Single(finalOrder.Items).CancelledQuantity);
+
+        var stockAfterCancel = await GetStockAsync(WirelessMouse);
+        Assert.Equal(stockAfterCheckout.Available + 2, stockAfterCancel.Available);
+        Assert.Equal(0, stockAfterCancel.Reserved);
+    }
+
+    [Fact]
+    public async Task CancelOrder_PartialCancellationExceedingRemaining_Returns400AndLeavesStock()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
+        var stockBeforeCancel = await GetStockAsync(WirelessMouse);
+        var etag = await GetOrderETagAsync(Alice, orderId);
+        var order = await GetOrderAsync(Alice, orderId);
+        var item = Assert.Single(order.Items);
+
+        var response = await SendCancelAsync(
+            Alice,
+            orderId,
+            etag,
+            new
+            {
+                items = new[]
+                {
+                    new { orderItemId = item.OrderItemId, quantity = 3 }
+                }
+            });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("validation_error", error.Code);
+
+        Assert.Equal(OrderStatus.Created, await GetOrderStatusAsync(orderId));
+        Assert.Equal(stockBeforeCancel, await GetStockAsync(WirelessMouse));
+    }
+
+    [Fact]
+    public async Task CancelOrder_WithEmptyItems_Returns400ValidationError()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+        var etag = await GetOrderETagAsync(Alice, orderId);
+
+        var response = await SendCancelAsync(
+            Alice,
+            orderId,
+            etag,
+            new { items = Array.Empty<object>() });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("validation_error", error.Code);
+    }
+
+    [Fact]
+    public async Task CancelOrder_WithUnknownOrderItem_Returns400ValidationError()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+        var etag = await GetOrderETagAsync(Alice, orderId);
+
+        var response = await SendCancelAsync(
+            Alice,
+            orderId,
+            etag,
+            new
+            {
+                items = new[]
+                {
+                    new { orderItemId = Guid.NewGuid(), quantity = 1 }
+                }
+            });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("validation_error", error.Code);
+    }
+
+    [Fact]
+    public async Task CancelOrder_WithUnsupportedContentType_Returns415UnsupportedMediaType()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+        var etag = await GetOrderETagAsync(Alice, orderId);
+
+        var request = new HttpRequestMessage(HttpMethod.Post, $"/api/orders/{orderId}/cancel")
+        {
+            Content = new StringContent("{\"items\":[]}", Encoding.UTF8, "text/plain")
+        };
+        request.Headers.Add("X-Test-User", Alice);
+        request.Headers.TryAddWithoutValidation("If-Match", etag);
+
+        var response = await _client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("unsupported_media_type", error.Code);
     }
 
     [Theory]
@@ -241,9 +540,53 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         Assert.Equal(OrderStatus.Returned, await GetOrderStatusAsync(orderId));
     }
 
-    private Task<HttpResponseMessage> CancelAsync(string testUser, Guid orderId)
+    private async Task<HttpResponseMessage> CancelAsync(string testUser, Guid orderId)
+    {
+        var etag = await GetOrderETagAsync(testUser, orderId);
+        return await SendCancelAsync(testUser, orderId, etag);
+    }
+
+    private Task<HttpResponseMessage> SendCancelAsync(
+        string testUser,
+        Guid orderId,
+        string? ifMatch,
+        object? body = null)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, $"/api/orders/{orderId}/cancel");
+        request.Headers.Add("X-Test-User", testUser);
+
+        if (ifMatch is not null)
+        {
+            request.Headers.TryAddWithoutValidation("If-Match", ifMatch);
+        }
+
+        if (body is not null)
+        {
+            request.Content = JsonContent.Create(body);
+        }
+
+        return _client.SendAsync(request);
+    }
+
+    private async Task<string> GetOrderETagAsync(string testUser, Guid orderId)
+    {
+        var response = await GetOrderByIdResponseAsync(testUser, orderId);
+        response.EnsureSuccessStatusCode();
+        return response.Headers.ETag!.Tag;
+    }
+
+    private async Task<OrderDetailResponse> GetOrderAsync(string testUser, Guid orderId)
+    {
+        var response = await GetOrderByIdResponseAsync(testUser, orderId);
+        response.EnsureSuccessStatusCode();
+        var order = await response.Content.ReadFromJsonAsync<OrderDetailResponse>();
+        Assert.NotNull(order);
+        return order;
+    }
+
+    private Task<HttpResponseMessage> GetOrderByIdResponseAsync(string testUser, Guid orderId)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/api/orders/{orderId}");
         request.Headers.Add("X-Test-User", testUser);
         return _client.SendAsync(request);
     }
@@ -330,7 +673,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
 
     private sealed record OrderDetailResponse(Guid Id, string Status, DateTime CreatedAtUtc, decimal TotalAmount, List<OrderItemResponse> Items);
 
-    private sealed record OrderItemResponse(Guid ProductId, string ProductName, decimal UnitPrice, int Quantity, decimal LineTotal);
+    private sealed record OrderItemResponse(Guid OrderItemId, Guid ProductId, string ProductName, decimal UnitPrice, int Quantity, int CancelledQuantity, decimal LineTotal);
 
     private sealed record ErrorResponse(string Code);
 

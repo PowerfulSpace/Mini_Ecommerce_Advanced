@@ -8,7 +8,7 @@ using PS.MiniEcommerce.Domain.Exceptions;
 
 namespace PS.MiniEcommerce.Application.Orders.Commands;
 
-public class CancelOrderHandler : IRequestHandler<CancelOrderCommand, OrderDto>
+public class CancelOrderHandler : IRequestHandler<CancelOrderCommand, CancelOrderResponse>
 {
     private readonly IOrderRepository _orderRepository;
     private readonly ICurrentUser _currentUser;
@@ -19,19 +19,28 @@ public class CancelOrderHandler : IRequestHandler<CancelOrderCommand, OrderDto>
         _currentUser = currentUser;
     }
 
-    public async Task<OrderDto> Handle(CancelOrderCommand request, CancellationToken cancellationToken)
+    public async Task<CancelOrderResponse> Handle(
+        CancelOrderCommand request,
+        CancellationToken cancellationToken)
     {
+        OrderVersionGuard.EnsurePresent(request.IfMatch);
+
         var userId = _currentUser.UserId;
+        var items = request.Items?.Select(item => (item.OrderItemId, item.Quantity)).ToList();
 
         // Created -> Cancelled releases Reserved back to Available.
         // Paid -> Cancelled restores Available only; Reserved is unchanged.
         // Refund for Paid -> Cancelled will be connected in stage 19 (ADR-008).
-        var (result, order, currentStatus) = await _orderRepository.CancelAsync(
-            request.OrderId, userId, cancellationToken);
+        var (result, order, currentStatus, newRowVersion) = await _orderRepository.CancelAsync(
+            request.OrderId,
+            userId,
+            request.IfMatch,
+            items,
+            cancellationToken);
 
         return result switch
         {
-            CancelOrderResult.Success => order!.ToDto(),
+            CancelOrderResult.Success => new CancelOrderResponse(order!.ToDto(), newRowVersion!),
             CancelOrderResult.NotFound => throw new NotFoundException(
                 $"Order with id {request.OrderId} was not found.",
                 "order_not_found"),

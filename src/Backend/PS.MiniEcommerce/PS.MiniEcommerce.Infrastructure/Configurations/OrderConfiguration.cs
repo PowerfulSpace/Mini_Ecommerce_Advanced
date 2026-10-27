@@ -41,6 +41,10 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
             .HasConversion(new MoneyValueConverter())
             .HasColumnType("decimal(18,2)");
 
+        builder.Property<byte[]>("RowVersion")
+            .IsRowVersion()
+            .IsRequired();
+
         builder.HasIndex(order => new { order.UserId, order.CreatedAtUtc })
             .IsDescending(false, true);
 

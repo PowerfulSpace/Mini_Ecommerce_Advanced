@@ -98,6 +98,12 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                     b.Property<Guid?>("PaymentId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -155,6 +161,34 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                             t.HasCheckConstraint("CK_OrderItems_Quantity_Positive", "[Quantity] > 0");
 
                             t.HasCheckConstraint("CK_OrderItems_UnitPrice_NonNegative", "[UnitPrice] >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("PS.MiniEcommerce.Domain.OrderItemCancellation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CancelledAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("OrderItemId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderItemId");
+
+                    b.ToTable("OrderItemCancellations", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_OrderItemCancellations_Quantity_Positive", "[Quantity] > 0");
                         });
                 });
 
@@ -325,6 +359,15 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("PS.MiniEcommerce.Domain.OrderItemCancellation", b =>
+                {
+                    b.HasOne("PS.MiniEcommerce.Domain.OrderItem", null)
+                        .WithMany("Cancellations")
+                        .HasForeignKey("OrderItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("PS.MiniEcommerce.Infrastructure.Persistence.CheckoutAttempt", b =>
                 {
                     b.HasOne("PS.MiniEcommerce.Domain.Order", null)
@@ -347,6 +390,11 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
             modelBuilder.Entity("PS.MiniEcommerce.Domain.Order", b =>
                 {
                     b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("PS.MiniEcommerce.Domain.OrderItem", b =>
+                {
+                    b.Navigation("Cancellations");
                 });
 #pragma warning restore 612, 618
         }

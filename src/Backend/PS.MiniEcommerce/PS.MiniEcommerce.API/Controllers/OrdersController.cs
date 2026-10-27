@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using PS.MiniEcommerce.API.Contracts;
 using PS.MiniEcommerce.Application.Checkout;
 using PS.MiniEcommerce.Application.Checkout.Commands;
 using PS.MiniEcommerce.Application.Common.Pagination;
@@ -37,9 +38,9 @@ public class OrdersController : ControllerBase
             new CheckoutCommand(idempotencyKey ?? string.Empty, ifMatch, fingerprint),
             cancellationToken);
 
-        if (result.NewCartRowVersion is not null)
+        if (result.NewOrderRowVersion is not null)
         {
-            Response.Headers.ETag = $"\"{Convert.ToBase64String(result.NewCartRowVersion)}\"";
+            Response.Headers.ETag = $"\"{Convert.ToBase64String(result.NewOrderRowVersion)}\"";
         }
 
         if (result.Success && result.OrderId is not null)
@@ -83,22 +84,31 @@ public class OrdersController : ControllerBase
         Guid orderId,
         CancellationToken cancellationToken = default)
     {
-        var order = await _mediator.Send(
+        var result = await _mediator.Send(
             new GetOrderByIdQuery(orderId),
             cancellationToken);
 
-        return Ok(order);
+        Response.Headers.ETag = $"\"{Convert.ToBase64String(result.RowVersion)}\"";
+
+        return Ok(result.Order);
     }
 
     [HttpPost("{orderId:guid}/cancel")]
     public async Task<IActionResult> Cancel(
         Guid orderId,
+        [FromHeader(Name = "If-Match")] string? ifMatch,
+        [FromBody] CancelOrderRequest? request,
         CancellationToken cancellationToken = default)
     {
-        var order = await _mediator.Send(
-            new CancelOrderCommand(orderId), cancellationToken);
+        var items = request?.Items?.Select(item => new CancelOrderItemDto(item.OrderItemId, item.Quantity)).ToList();
 
-        return Ok(order);
+        var result = await _mediator.Send(
+            new CancelOrderCommand(orderId, ifMatch ?? string.Empty, items),
+            cancellationToken);
+
+        Response.Headers.ETag = $"\"{Convert.ToBase64String(result.RowVersion)}\"";
+
+        return Ok(result.Order);
     }
 
     private static string EnsureProblemDetailsInstance(string payload, PathString path)

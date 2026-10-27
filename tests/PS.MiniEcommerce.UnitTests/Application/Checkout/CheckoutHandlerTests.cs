@@ -41,7 +41,11 @@ public class CheckoutHandlerTests
             .GetByUserAndKeyAsync(UserId, IdempotencyKey, Arg.Any<CancellationToken>())
             .Returns(CreateAttempt(CheckoutAttemptState.Completed, statusCode: 201, payload: payload));
         var executor = Substitute.For<ICheckoutTransactionExecutor>();
-        var handler = CreateHandler(repository, executor);
+        var orderRepository = Substitute.For<IOrderRepository>();
+        orderRepository
+            .GetRowVersionAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns((byte[]?)null);
+        var handler = CreateHandler(repository, executor, orderRepository);
 
         var result = await handler.Handle(CreateCommand(), CancellationToken.None);
 
@@ -49,7 +53,31 @@ public class CheckoutHandlerTests
         Assert.Equal(201, result.ResponseStatusCode);
         Assert.Equal(payload, result.ResponsePayload);
         Assert.Null(result.OrderId);
-        Assert.Null(result.NewCartRowVersion);
+        Assert.Null(result.NewOrderRowVersion);
+    }
+
+    [Fact]
+    public async Task Handle_WhenAttemptExistsCompletedWithOrder_ReturnsReplayWithCurrentOrderRowVersion()
+    {
+        const string payload = "{\"id\":\"6f1e2a44-0000-0000-0000-000000000000\"}";
+        var orderId = Guid.NewGuid();
+        var rowVersion = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 };
+        var repository = Substitute.For<ICheckoutAttemptRepository>();
+        repository
+            .GetByUserAndKeyAsync(UserId, IdempotencyKey, Arg.Any<CancellationToken>())
+            .Returns(CreateAttempt(CheckoutAttemptState.Completed, statusCode: 201, payload: payload, orderId: orderId));
+        var executor = Substitute.For<ICheckoutTransactionExecutor>();
+        var orderRepository = Substitute.For<IOrderRepository>();
+        orderRepository
+            .GetRowVersionAsync(orderId, Arg.Any<CancellationToken>())
+            .Returns(rowVersion);
+        var handler = CreateHandler(repository, executor, orderRepository);
+
+        var result = await handler.Handle(CreateCommand(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Equal(rowVersion, result.NewOrderRowVersion);
+        await orderRepository.Received(1).GetRowVersionAsync(orderId, Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -144,7 +172,7 @@ public class CheckoutHandlerTests
             ResponseStatusCode: 201,
             ResponsePayload: "{\"status\":\"Created\"}",
             OrderId: Guid.NewGuid(),
-            NewCartRowVersion: new byte[8]);
+            NewOrderRowVersion: new byte[8]);
         var executor = Substitute.For<ICheckoutTransactionExecutor>();
         executor
             .ExecuteAsync(UserId, Arg.Any<Guid>(), IfMatch, Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
@@ -258,7 +286,7 @@ public class CheckoutHandlerTests
             ResponseStatusCode: 201,
             ResponsePayload: "{\"status\":\"Created\"}",
             OrderId: Guid.NewGuid(),
-            NewCartRowVersion: new byte[8]);
+            NewOrderRowVersion: new byte[8]);
         var executor = Substitute.For<ICheckoutTransactionExecutor>();
         executor
             .ExecuteAsync(UserId, resumed.Id, IfMatch, Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
@@ -340,12 +368,17 @@ public class CheckoutHandlerTests
 
     private static CheckoutHandler CreateHandler(
         ICheckoutAttemptRepository repository,
-        ICheckoutTransactionExecutor executor)
+        ICheckoutTransactionExecutor executor,
+        IOrderRepository? orderRepository = null)
     {
         var currentUser = Substitute.For<ICurrentUser>();
         currentUser.UserId.Returns(UserId);
 
-        return new CheckoutHandler(repository, executor, currentUser);
+        return new CheckoutHandler(
+            repository,
+            executor,
+            orderRepository ?? Substitute.For<IOrderRepository>(),
+            currentUser);
     }
 
     private static CheckoutAttemptData CreateAttempt(
@@ -353,13 +386,14 @@ public class CheckoutHandlerTests
         byte[]? fingerprint = null,
         int? statusCode = null,
         string? payload = null,
-        DateTime? leaseExpiresAtUtc = null) => new(
+        DateTime? leaseExpiresAtUtc = null,
+        Guid? orderId = null) => new(
             Guid.NewGuid(),
             UserId,
             IdempotencyKey,
             fingerprint ?? Fingerprint,
             state,
-            state == CheckoutAttemptState.Completed ? Guid.NewGuid() : null,
+            orderId ?? (state == CheckoutAttemptState.Completed ? Guid.NewGuid() : null),
             statusCode,
             payload,
             leaseExpiresAtUtc ?? FixedUtcNow.AddSeconds(30));

@@ -6,6 +6,8 @@ public class OrderItem
 {
     private const int MaxProductNameLength = 200;
 
+    private readonly List<OrderItemCancellation> _cancellations = new();
+
     public Guid Id { get; private set; }
 
     public Guid OrderId { get; private set; }
@@ -17,6 +19,10 @@ public class OrderItem
     public Money UnitPrice { get; private set; }
 
     public int Quantity { get; private set; }
+
+    public IReadOnlyCollection<OrderItemCancellation> Cancellations => _cancellations.AsReadOnly();
+
+    public int CancelledQuantity => _cancellations.Sum(cancellation => cancellation.Quantity);
 
     private OrderItem()
     {
@@ -51,5 +57,21 @@ public class OrderItem
         ProductName = data.ProductName;
         UnitPrice = data.UnitPrice;
         Quantity = data.Quantity;
+    }
+
+    public void AddCancellation(int quantity, DateTime utcNow, string? reason = null)
+    {
+        if (quantity <= 0)
+        {
+            throw new DomainValidationException("Cancellation quantity must be positive.");
+        }
+
+        if (CancelledQuantity + quantity > Quantity)
+        {
+            throw new DomainValidationException(
+                "Cancellation quantity must not exceed the remaining ordered quantity.");
+        }
+
+        _cancellations.Add(OrderItemCancellation.Create(Id, quantity, utcNow, reason));
     }
 }

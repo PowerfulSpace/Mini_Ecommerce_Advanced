@@ -356,6 +356,154 @@ public class OrderTests
         Assert.Equal(59.97m, order.TotalAmount.Amount);
     }
 
+    [Fact]
+    public void Cancel_OnCreatedOrder_CreatesCancellationForRemainingQuantity()
+    {
+        var order = Order.Create(
+            UserId,
+            new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 3) },
+            FixedUtcNow);
+
+        order.Cancel(FixedUtcNow);
+
+        Assert.Equal(OrderStatus.Cancelled, order.Status);
+        var item = Assert.Single(order.Items);
+        Assert.Equal(3, item.CancelledQuantity);
+        var cancellation = Assert.Single(item.Cancellations);
+        Assert.Equal(3, cancellation.Quantity);
+        Assert.Equal(FixedUtcNow, cancellation.CancelledAtUtc);
+    }
+
+    [Fact]
+    public void Cancel_AfterPartialCancellation_CancelsOnlyRemainingQuantity()
+    {
+        var order = Order.Create(
+            UserId,
+            new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 2) },
+            FixedUtcNow);
+        var item = Assert.Single(order.Items);
+        order.CancelItems(new[] { (item.Id, 1) }, FixedUtcNow);
+
+        order.Cancel(FixedUtcNow);
+
+        Assert.Equal(OrderStatus.Cancelled, order.Status);
+        Assert.Equal(2, item.CancelledQuantity);
+        Assert.Equal(2, item.Cancellations.Count);
+        Assert.Equal(2, item.Cancellations.Sum(cancellation => cancellation.Quantity));
+    }
+
+    [Fact]
+    public void CancelItems_WithPartialQuantity_UpdatesCancelledQuantityAndKeepsStatusCreated()
+    {
+        var order = Order.Create(
+            UserId,
+            new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 2) },
+            FixedUtcNow);
+        var item = Assert.Single(order.Items);
+
+        order.CancelItems(new[] { (item.Id, 1) }, FixedUtcNow);
+
+        Assert.Equal(OrderStatus.Created, order.Status);
+        Assert.Equal(1, item.CancelledQuantity);
+        var cancellation = Assert.Single(item.Cancellations);
+        Assert.Equal(1, cancellation.Quantity);
+        Assert.Equal(FixedUtcNow, cancellation.CancelledAtUtc);
+        Assert.Equal(20m, order.TotalAmount.Amount);
+    }
+
+    [Fact]
+    public void CancelItems_WhenAllRemainingQuantityCancelled_SetsStatusCancelled()
+    {
+        var order = Order.Create(
+            UserId,
+            new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 2) },
+            FixedUtcNow);
+        var item = Assert.Single(order.Items);
+
+        order.CancelItems(new[] { (item.Id, 2) }, FixedUtcNow);
+
+        Assert.Equal(OrderStatus.Cancelled, order.Status);
+        Assert.Equal(2, item.CancelledQuantity);
+        Assert.Equal(10m * 2, order.TotalAmount.Amount);
+    }
+
+    [Fact]
+    public void CancelItems_WhenQuantityExceedsRemaining_ThrowsDomainValidationException()
+    {
+        var order = Order.Create(
+            UserId,
+            new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 3) },
+            FixedUtcNow);
+        var item = Assert.Single(order.Items);
+        order.CancelItems(new[] { (item.Id, 1) }, FixedUtcNow);
+
+        Assert.Throws<DomainValidationException>(
+            () => order.CancelItems(new[] { (item.Id, 3) }, FixedUtcNow));
+
+        Assert.Equal(1, item.CancelledQuantity);
+        Assert.Equal(OrderStatus.Created, order.Status);
+    }
+
+    [Fact]
+    public void CancelItems_WithUnknownOrderItemId_ThrowsDomainValidationException()
+    {
+        var order = CreateOrder();
+
+        Assert.Throws<DomainValidationException>(
+            () => order.CancelItems(new[] { (Guid.NewGuid(), 1) }, FixedUtcNow));
+    }
+
+    [Fact]
+    public void CancelItems_WithDuplicateOrderItemIds_ThrowsDomainValidationException()
+    {
+        var order = CreateOrder();
+        var item = Assert.Single(order.Items);
+
+        Assert.Throws<DomainValidationException>(
+            () => order.CancelItems(new[] { (item.Id, 1), (item.Id, 1) }, FixedUtcNow));
+
+        Assert.Equal(0, item.CancelledQuantity);
+    }
+
+    [Fact]
+    public void CancelItems_WithNullItems_ThrowsDomainValidationException()
+    {
+        var order = CreateOrder();
+
+        Assert.Throws<DomainValidationException>(
+            () => order.CancelItems(null!, FixedUtcNow));
+    }
+
+    [Fact]
+    public void CancelItems_WithEmptyItems_ThrowsDomainValidationException()
+    {
+        var order = CreateOrder();
+
+        Assert.Throws<DomainValidationException>(
+            () => order.CancelItems(Array.Empty<(Guid OrderItemId, int Quantity)>(), FixedUtcNow));
+    }
+
+    [Fact]
+    public void AddCancellation_WithNonPositiveQuantity_ThrowsDomainValidationException()
+    {
+        var order = CreateOrder();
+        var item = Assert.Single(order.Items);
+
+        Assert.Throws<DomainValidationException>(() => item.AddCancellation(0, FixedUtcNow));
+        Assert.Throws<DomainValidationException>(() => item.AddCancellation(-1, FixedUtcNow));
+    }
+
+    [Fact]
+    public void AddCancellation_WithQuantityExceedingRemaining_ThrowsDomainValidationException()
+    {
+        var order = CreateOrder();
+        var item = Assert.Single(order.Items);
+        item.AddCancellation(1, FixedUtcNow);
+
+        Assert.Throws<DomainValidationException>(() => item.AddCancellation(1, FixedUtcNow));
+        Assert.Equal(1, item.CancelledQuantity);
+    }
+
     private static Order CreateOrder(Guid? paymentId = null) =>
         Order.Create(
             UserId,

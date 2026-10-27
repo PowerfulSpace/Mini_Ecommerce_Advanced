@@ -23,6 +23,8 @@ public class AppDbContext : DbContext
 
     public DbSet<OrderItem> OrderItems => Set<OrderItem>();
 
+    public DbSet<OrderItemCancellation> OrderItemCancellations => Set<OrderItemCancellation>();
+
     public DbSet<CheckoutAttempt> CheckoutAttempts => Set<CheckoutAttempt>();
 
     protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)

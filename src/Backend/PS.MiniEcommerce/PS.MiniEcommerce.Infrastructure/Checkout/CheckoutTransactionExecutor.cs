@@ -228,12 +228,22 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
                     .AsNoTracking()
                     .FirstAsync(checkoutAttempt => checkoutAttempt.Id == checkoutAttemptId, cancellationToken);
 
+                byte[]? existingOrderRowVersion = null;
+                if (existing.OrderId is not null)
+                {
+                    existingOrderRowVersion = await _dbContext.Orders
+                        .AsNoTracking()
+                        .Where(existingOrder => existingOrder.Id == existing.OrderId)
+                        .Select(existingOrder => EF.Property<byte[]>(existingOrder, "RowVersion"))
+                        .FirstOrDefaultAsync(cancellationToken);
+                }
+
                 return new CheckoutExecutionResult(
                     Success: existing.ResponseStatusCode == CreatedStatusCode,
                     ResponseStatusCode: existing.ResponseStatusCode!.Value,
                     ResponsePayload: existing.ResponsePayload!,
                     OrderId: existing.OrderId,
-                    NewCartRowVersion: null);
+                    NewOrderRowVersion: existingOrderRowVersion);
             }
 
             await transaction.CommitAsync(cancellationToken);
@@ -245,10 +255,10 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
                 exception);
         }
 
-        var newRowVersion = await _dbContext.Carts
+        var newRowVersion = await _dbContext.Orders
             .AsNoTracking()
-            .Where(c => c.Id == cart.Id)
-            .Select(c => EF.Property<byte[]>(c, "RowVersion"))
+            .Where(createdOrder => createdOrder.Id == order.Id)
+            .Select(createdOrder => EF.Property<byte[]>(createdOrder, "RowVersion"))
             .FirstAsync(cancellationToken);
 
         return new CheckoutExecutionResult(
@@ -256,7 +266,7 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
             ResponseStatusCode: CreatedStatusCode,
             ResponsePayload: responsePayload,
             OrderId: order.Id,
-            NewCartRowVersion: newRowVersion);
+            NewOrderRowVersion: newRowVersion);
     }
 
     private async Task<DomainConflictException?> BuildStockOrAvailabilityErrorAsync(
@@ -351,7 +361,7 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
             ResponseStatusCode: statusCode,
             ResponsePayload: responsePayload,
             OrderId: null,
-            NewCartRowVersion: null);
+            NewOrderRowVersion: null);
     }
 
     private async Task<CheckoutExecutionResult> PersistErrorAsync(
@@ -382,7 +392,7 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
             ResponseStatusCode: statusCode,
             ResponsePayload: responsePayload,
             OrderId: null,
-            NewCartRowVersion: null);
+            NewOrderRowVersion: null);
     }
 
     private static (int StatusCode, string Payload) MapToProblemDetails(Exception exception)
