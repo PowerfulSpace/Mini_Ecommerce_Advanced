@@ -90,6 +90,9 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<Guid?>("PaymentId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -108,7 +111,7 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
 
                     b.ToTable("Orders", null, t =>
                         {
-                            t.HasCheckConstraint("CK_Orders_Status_Valid", "[Status] IN ('Created', 'Cancelled')");
+                            t.HasCheckConstraint("CK_Orders_Status_Valid", "[Status] IN ('Created', 'Paid', 'Shipped', 'Delivered', 'Cancelled', 'Returned')");
 
                             t.HasCheckConstraint("CK_Orders_TotalAmount_NonNegative", "[TotalAmount] >= 0");
                         });

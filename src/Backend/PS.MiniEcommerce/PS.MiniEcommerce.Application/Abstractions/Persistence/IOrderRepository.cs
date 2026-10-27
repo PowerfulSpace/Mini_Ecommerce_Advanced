@@ -15,7 +15,7 @@ public interface IOrderRepository
         Guid userId,
         CancellationToken cancellationToken);
 
-    Task<(CancelOrderResult Result, Order? Order)> CancelAsync(
+    Task<(CancelOrderResult Result, Order? Order, OrderStatus? CurrentStatus)> CancelAsync(
         Guid orderId,
         Guid userId,
         CancellationToken cancellationToken);

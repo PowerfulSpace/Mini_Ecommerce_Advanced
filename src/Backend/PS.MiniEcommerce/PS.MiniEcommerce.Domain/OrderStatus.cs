@@ -3,5 +3,9 @@ namespace PS.MiniEcommerce.Domain;
 public enum OrderStatus
 {
     Created,
-    Cancelled
+    Paid,
+    Shipped,
+    Delivered,
+    Cancelled,
+    Returned
 }

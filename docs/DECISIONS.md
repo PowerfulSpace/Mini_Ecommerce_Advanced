@@ -18,6 +18,9 @@
   которому они принадлежат.
 - Денежные значения в Domain представлены value object `Money` (USD,
   `decimal(18,2)`); см. [ADR-003](adr/ADR-003-money-value-object.md).
+- `Money` допускает отрицательные `Amount`; неотрицательность — инвариант
+  сущностей. См. [ADR-003](adr/ADR-003-money-value-object.md) (уточнение
+  этапа 12).
 - Жизненный цикл заказа — явная state machine из шести статусов; см.
   [ADR-004](adr/ADR-004-order-state-machine.md).
 - Запас хранится как `Available` + `Reserved`; см.

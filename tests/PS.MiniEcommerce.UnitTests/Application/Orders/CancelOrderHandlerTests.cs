@@ -15,7 +15,7 @@ public class CancelOrderHandlerTests
     private static readonly Guid ProductA = Guid.NewGuid();
 
     [Fact]
-    public async Task Handle_WhenCancelSucceeds_ReturnsOrderDto()
+    public async Task Handle_WhenCreatedOrderCancelled_ReturnsCancelledOrderDto()
     {
         var order = CreateOrder();
         order.Cancel();
@@ -23,7 +23,26 @@ public class CancelOrderHandlerTests
         var repository = Substitute.For<IOrderRepository>();
         repository
             .CancelAsync(order.Id, UserId, Arg.Any<CancellationToken>())
-            .Returns((CancelOrderResult.Success, (Order?)order));
+            .Returns((CancelOrderResult.Success, (Order?)order, (OrderStatus?)OrderStatus.Cancelled));
+
+        var handler = new CancelOrderHandler(repository, CreateCurrentUser());
+
+        var dto = await handler.Handle(new CancelOrderCommand(order.Id), CancellationToken.None);
+
+        Assert.Equal(order.Id, dto.Id);
+        Assert.Equal("Cancelled", dto.Status);
+    }
+
+    [Fact]
+    public async Task Handle_WhenPaidOrderCancelled_ReturnsCancelledOrderDto()
+    {
+        var order = CreatePaidOrder();
+        order.Cancel();
+
+        var repository = Substitute.For<IOrderRepository>();
+        repository
+            .CancelAsync(order.Id, UserId, Arg.Any<CancellationToken>())
+            .Returns((CancelOrderResult.Success, (Order?)order, (OrderStatus?)OrderStatus.Cancelled));
 
         var handler = new CancelOrderHandler(repository, CreateCurrentUser());
 
@@ -39,7 +58,7 @@ public class CancelOrderHandlerTests
         var repository = Substitute.For<IOrderRepository>();
         repository
             .CancelAsync(Arg.Any<Guid>(), UserId, Arg.Any<CancellationToken>())
-            .Returns((CancelOrderResult.NotFound, (Order?)null));
+            .Returns((CancelOrderResult.NotFound, (Order?)null, (OrderStatus?)null));
 
         var handler = new CancelOrderHandler(repository, CreateCurrentUser());
 
@@ -55,7 +74,7 @@ public class CancelOrderHandlerTests
         var repository = Substitute.For<IOrderRepository>();
         repository
             .CancelAsync(Arg.Any<Guid>(), UserId, Arg.Any<CancellationToken>())
-            .Returns((CancelOrderResult.AlreadyCancelled, (Order?)null));
+            .Returns((CancelOrderResult.AlreadyCancelled, (Order?)null, (OrderStatus?)OrderStatus.Cancelled));
 
         var handler = new CancelOrderHandler(repository, CreateCurrentUser());
 
@@ -65,8 +84,41 @@ public class CancelOrderHandlerTests
         Assert.Equal("order_already_cancelled", exception.Code);
     }
 
-    private static Order CreateOrder() =>
-        Order.Create(UserId, new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(19.99m), 1) }, FixedUtcNow);
+    [Theory]
+    [InlineData(OrderStatus.Shipped)]
+    [InlineData(OrderStatus.Delivered)]
+    [InlineData(OrderStatus.Returned)]
+    public async Task Handle_WhenStatusDoesNotAllowCancellation_ThrowsInvalidOrderTransition(
+        OrderStatus status)
+    {
+        var repository = Substitute.For<IOrderRepository>();
+        repository
+            .CancelAsync(Arg.Any<Guid>(), UserId, Arg.Any<CancellationToken>())
+            .Returns((CancelOrderResult.InvalidTransition, (Order?)null, (OrderStatus?)status));
+
+        var handler = new CancelOrderHandler(repository, CreateCurrentUser());
+
+        var exception = await Assert.ThrowsAsync<DomainConflictException>(
+            () => handler.Handle(new CancelOrderCommand(Guid.NewGuid()), CancellationToken.None));
+
+        Assert.Equal("invalid_order_transition", exception.Code);
+        Assert.Contains(status.ToString(), exception.Message);
+        Assert.Contains("Cancelled", exception.Message);
+    }
+
+    private static Order CreateOrder(Guid? paymentId = null) =>
+        Order.Create(
+            UserId,
+            new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(19.99m), 1) },
+            FixedUtcNow,
+            paymentId);
+
+    private static Order CreatePaidOrder()
+    {
+        var order = CreateOrder(Guid.NewGuid());
+        order.MarkPaid();
+        return order;
+    }
 
     private static ICurrentUser CreateCurrentUser()
     {

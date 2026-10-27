@@ -135,9 +135,51 @@ public class OrderTests
     }
 
     [Fact]
+    public void MarkPaid_WithPaymentId_SetsStatusPaid()
+    {
+        var order = CreateOrder(Guid.NewGuid());
+
+        order.MarkPaid();
+
+        Assert.Equal(OrderStatus.Paid, order.Status);
+    }
+
+    [Fact]
+    public void MarkPaid_WithoutPaymentId_ThrowsInvalidOrderTransition()
+    {
+        var order = CreateOrder();
+
+        var exception = AssertInvalidTransition(order.MarkPaid);
+
+        Assert.Contains("Created", exception.Message);
+        Assert.Contains("Paid", exception.Message);
+        Assert.Contains("payment is required", exception.Message);
+    }
+
+    [Fact]
+    public void Ship_OnPaidOrder_SetsStatusShipped()
+    {
+        var order = CreatePaidOrder();
+
+        order.Ship();
+
+        Assert.Equal(OrderStatus.Shipped, order.Status);
+    }
+
+    [Fact]
+    public void Deliver_OnShippedOrder_SetsStatusDelivered()
+    {
+        var order = CreateShippedOrder();
+
+        order.Deliver();
+
+        Assert.Equal(OrderStatus.Delivered, order.Status);
+    }
+
+    [Fact]
     public void Cancel_OnCreatedOrder_SetsStatusCancelled()
     {
-        var order = Order.Create(UserId, new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 1) }, FixedUtcNow);
+        var order = CreateOrder();
 
         order.Cancel();
 
@@ -145,12 +187,149 @@ public class OrderTests
     }
 
     [Fact]
-    public void Cancel_WhenAlreadyCancelled_ThrowsDomainConflictException()
+    public void Cancel_OnPaidOrder_SetsStatusCancelled()
     {
-        var order = Order.Create(UserId, new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 1) }, FixedUtcNow);
+        var order = CreatePaidOrder();
+
         order.Cancel();
 
-        Assert.Throws<DomainConflictException>(() => order.Cancel());
+        Assert.Equal(OrderStatus.Cancelled, order.Status);
+    }
+
+    [Fact]
+    public void Return_OnDeliveredOrder_SetsStatusReturned()
+    {
+        var order = CreateDeliveredOrder();
+
+        order.Return();
+
+        Assert.Equal(OrderStatus.Returned, order.Status);
+    }
+
+    [Fact]
+    public void Ship_OnCreatedOrder_ThrowsInvalidOrderTransition()
+    {
+        var order = CreateOrder();
+
+        var exception = AssertInvalidTransition(order.Ship);
+
+        Assert.Contains("Created", exception.Message);
+        Assert.Contains("Shipped", exception.Message);
+    }
+
+    [Fact]
+    public void Deliver_OnCreatedOrder_ThrowsInvalidOrderTransition()
+    {
+        var order = CreateOrder();
+
+        var exception = AssertInvalidTransition(order.Deliver);
+
+        Assert.Contains("Created", exception.Message);
+        Assert.Contains("Delivered", exception.Message);
+    }
+
+    [Fact]
+    public void Deliver_OnPaidOrder_ThrowsInvalidOrderTransition()
+    {
+        var order = CreatePaidOrder();
+
+        var exception = AssertInvalidTransition(order.Deliver);
+
+        Assert.Contains("Paid", exception.Message);
+        Assert.Contains("Delivered", exception.Message);
+    }
+
+    [Fact]
+    public void Cancel_OnShippedOrder_ThrowsInvalidOrderTransition()
+    {
+        var order = CreateShippedOrder();
+
+        var exception = AssertInvalidTransition(order.Cancel);
+
+        Assert.Contains("Shipped", exception.Message);
+        Assert.Contains("Cancelled", exception.Message);
+    }
+
+    [Fact]
+    public void Cancel_OnDeliveredOrder_ThrowsInvalidOrderTransition()
+    {
+        var order = CreateDeliveredOrder();
+
+        var exception = AssertInvalidTransition(order.Cancel);
+
+        Assert.Contains("Delivered", exception.Message);
+        Assert.Contains("Cancelled", exception.Message);
+    }
+
+    [Fact]
+    public void MarkPaid_WhenAlreadyPaid_ThrowsInvalidOrderTransition()
+    {
+        var order = CreatePaidOrder();
+
+        AssertInvalidTransition(order.MarkPaid);
+    }
+
+    [Fact]
+    public void Ship_WhenAlreadyShipped_ThrowsInvalidOrderTransition()
+    {
+        var order = CreateShippedOrder();
+
+        AssertInvalidTransition(order.Ship);
+    }
+
+    [Fact]
+    public void Deliver_WhenAlreadyDelivered_ThrowsInvalidOrderTransition()
+    {
+        var order = CreateDeliveredOrder();
+
+        AssertInvalidTransition(order.Deliver);
+    }
+
+    [Fact]
+    public void Cancel_WhenAlreadyCancelled_ThrowsInvalidOrderTransition()
+    {
+        var order = CreateCancelledOrder();
+
+        var exception = AssertInvalidTransition(order.Cancel);
+
+        Assert.Contains("Cancelled", exception.Message);
+    }
+
+    [Fact]
+    public void Return_WhenAlreadyReturned_ThrowsInvalidOrderTransition()
+    {
+        var order = CreateReturnedOrder();
+
+        var exception = AssertInvalidTransition(order.Return);
+
+        Assert.Contains("Returned", exception.Message);
+    }
+
+    [Theory]
+    [MemberData(nameof(TerminalStatusTransitions))]
+    public void Transition_FromTerminalStatus_ThrowsInvalidOrderTransition(
+        OrderStatus status,
+        Action<Order> transition)
+    {
+        var order = CreateOrderInStatus(status);
+
+        var exception = AssertInvalidTransition(() => transition(order));
+
+        Assert.Contains(status.ToString(), exception.Message);
+    }
+
+    public static IEnumerable<object[]> TerminalStatusTransitions()
+    {
+        yield return new object[] { OrderStatus.Cancelled, (Action<Order>)(order => order.MarkPaid()) };
+        yield return new object[] { OrderStatus.Cancelled, (Action<Order>)(order => order.Ship()) };
+        yield return new object[] { OrderStatus.Cancelled, (Action<Order>)(order => order.Deliver()) };
+        yield return new object[] { OrderStatus.Cancelled, (Action<Order>)(order => order.Cancel()) };
+        yield return new object[] { OrderStatus.Cancelled, (Action<Order>)(order => order.Return()) };
+        yield return new object[] { OrderStatus.Returned, (Action<Order>)(order => order.MarkPaid()) };
+        yield return new object[] { OrderStatus.Returned, (Action<Order>)(order => order.Ship()) };
+        yield return new object[] { OrderStatus.Returned, (Action<Order>)(order => order.Deliver()) };
+        yield return new object[] { OrderStatus.Returned, (Action<Order>)(order => order.Cancel()) };
+        yield return new object[] { OrderStatus.Returned, (Action<Order>)(order => order.Return()) };
     }
 
     [Fact]
@@ -175,5 +354,65 @@ public class OrderTests
         var order = Order.Create(UserId, new[] { data }, FixedUtcNow);
 
         Assert.Equal(59.97m, order.TotalAmount.Amount);
+    }
+
+    private static Order CreateOrder(Guid? paymentId = null) =>
+        Order.Create(
+            UserId,
+            new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 1) },
+            FixedUtcNow,
+            paymentId);
+
+    private static Order CreatePaidOrder()
+    {
+        var order = CreateOrder(Guid.NewGuid());
+        order.MarkPaid();
+        return order;
+    }
+
+    private static Order CreateShippedOrder()
+    {
+        var order = CreatePaidOrder();
+        order.Ship();
+        return order;
+    }
+
+    private static Order CreateDeliveredOrder()
+    {
+        var order = CreateShippedOrder();
+        order.Deliver();
+        return order;
+    }
+
+    private static Order CreateCancelledOrder()
+    {
+        var order = CreateOrder();
+        order.Cancel();
+        return order;
+    }
+
+    private static Order CreateReturnedOrder()
+    {
+        var order = CreateDeliveredOrder();
+        order.Return();
+        return order;
+    }
+
+    private static Order CreateOrderInStatus(OrderStatus status) => status switch
+    {
+        OrderStatus.Created => CreateOrder(),
+        OrderStatus.Paid => CreatePaidOrder(),
+        OrderStatus.Shipped => CreateShippedOrder(),
+        OrderStatus.Delivered => CreateDeliveredOrder(),
+        OrderStatus.Cancelled => CreateCancelledOrder(),
+        OrderStatus.Returned => CreateReturnedOrder(),
+        _ => throw new ArgumentOutOfRangeException(nameof(status), status, null)
+    };
+
+    private static DomainConflictException AssertInvalidTransition(Action action)
+    {
+        var exception = Assert.Throws<DomainConflictException>(action);
+        Assert.Equal("invalid_order_transition", exception.Code);
+        return exception;
     }
 }

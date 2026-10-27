@@ -130,6 +130,111 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         Assert.Equal(stockAfterCheckout + 2, await GetStockQuantityAsync(WirelessMouse));
     }
 
+    [Fact]
+    public async Task CancelOrder_WhenPaid_ReturnsCancelledAndDoesNotRestoreStock()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
+        var stockAfterCheckout = await GetStockQuantityAsync(WirelessMouse);
+        await SetStatusAsync(orderId, OrderStatus.Paid, Guid.NewGuid());
+
+        var response = await CancelAsync(Alice, orderId);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var order = await response.Content.ReadFromJsonAsync<OrderDetailResponse>();
+        Assert.NotNull(order);
+        Assert.Equal(orderId, order.Id);
+        Assert.Equal("Cancelled", order.Status);
+
+        Assert.Equal(OrderStatus.Cancelled, await GetOrderStatusAsync(orderId));
+        Assert.Equal(stockAfterCheckout, await GetStockQuantityAsync(WirelessMouse));
+    }
+
+    [Theory]
+    [InlineData(OrderStatus.Shipped)]
+    [InlineData(OrderStatus.Delivered)]
+    [InlineData(OrderStatus.Returned)]
+    public async Task CancelOrder_WhenStatusDoesNotAllowCancellation_Returns409InvalidTransition(
+        OrderStatus status)
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+        var stockBeforeCancel = await GetStockQuantityAsync(WirelessMouse);
+        await SetStatusAsync(orderId, status);
+
+        var response = await CancelAsync(Alice, orderId);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("invalid_order_transition", error.Code);
+
+        Assert.Equal(status, await GetOrderStatusAsync(orderId));
+        Assert.Equal(stockBeforeCancel, await GetStockQuantityAsync(WirelessMouse));
+    }
+
+    [Fact]
+    public async Task PaymentId_IsNullableAndPersists()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+
+        await using (var context = CreateContext())
+        {
+            var initialPaymentId = await context.Orders
+                .AsNoTracking()
+                .Where(order => order.Id == orderId)
+                .Select(order => order.PaymentId)
+                .FirstAsync();
+
+            Assert.Null(initialPaymentId);
+
+            var paymentId = Guid.NewGuid();
+            var affected = await context.Orders
+                .Where(order => order.Id == orderId)
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(order => order.PaymentId, paymentId));
+
+            Assert.Equal(1, affected);
+        }
+
+        await using (var context = CreateContext())
+        {
+            var storedPaymentId = await context.Orders
+                .AsNoTracking()
+                .Where(order => order.Id == orderId)
+                .Select(order => order.PaymentId)
+                .FirstAsync();
+
+            Assert.NotNull(storedPaymentId);
+            Assert.NotEqual(Guid.Empty, storedPaymentId.Value);
+        }
+    }
+
+    [Fact]
+    public async Task StatusCheck_AcceptsSixStatusesAndRejectsUnknown()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+
+        foreach (var status in Enum.GetValues<OrderStatus>())
+        {
+            await SetStatusAsync(orderId, status);
+
+            Assert.Equal(status, await GetOrderStatusAsync(orderId));
+        }
+
+        await using (var context = CreateContext())
+        {
+            var exception = await Record.ExceptionAsync(() =>
+                context.Database.ExecuteSqlRawAsync(
+                    "UPDATE Orders SET Status = {0} WHERE Id = {1}",
+                    "Unknown",
+                    orderId));
+
+            Assert.NotNull(exception);
+            Assert.Contains("CK_Orders_Status_Valid", exception.Message);
+        }
+
+        Assert.Equal(OrderStatus.Returned, await GetOrderStatusAsync(orderId));
+    }
+
     private Task<HttpResponseMessage> CancelAsync(string testUser, Guid orderId)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, $"/api/orders/{orderId}/cancel");
@@ -195,6 +300,19 @@ public class OrderCancelEndpointTests : IAsyncLifetime
             .Where(order => order.Id == orderId)
             .Select(order => order.Status)
             .FirstAsync();
+    }
+
+    private async Task SetStatusAsync(Guid orderId, OrderStatus status, Guid? paymentId = null)
+    {
+        await using var context = CreateContext();
+        var affected = await context.Orders
+            .Where(order => order.Id == orderId)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(order => order.Status, status)
+                    .SetProperty(order => order.PaymentId, paymentId));
+
+        Assert.Equal(1, affected);
     }
 
     private AppDbContext CreateContext() =>

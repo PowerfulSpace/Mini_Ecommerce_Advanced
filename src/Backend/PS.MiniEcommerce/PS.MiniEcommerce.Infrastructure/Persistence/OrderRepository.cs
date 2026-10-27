@@ -47,12 +47,14 @@ public class OrderRepository : IOrderRepository
                 cancellationToken);
     }
 
-    public async Task<(CancelOrderResult Result, Order? Order)> CancelAsync(
+    public async Task<(CancelOrderResult Result, Order? Order, OrderStatus? CurrentStatus)> CancelAsync(
         Guid orderId,
         Guid userId,
         CancellationToken cancellationToken)
     {
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        var restoreStock = false;
 
         var affected = await _dbContext.Orders
             .Where(order =>
@@ -62,6 +64,22 @@ public class OrderRepository : IOrderRepository
             .ExecuteUpdateAsync(
                 setters => setters.SetProperty(order => order.Status, OrderStatus.Cancelled),
                 cancellationToken);
+
+        if (affected > 0)
+        {
+            restoreStock = true;
+        }
+        else
+        {
+            affected = await _dbContext.Orders
+                .Where(order =>
+                    order.Id == orderId
+                    && order.UserId == userId
+                    && order.Status == OrderStatus.Paid)
+                .ExecuteUpdateAsync(
+                    setters => setters.SetProperty(order => order.Status, OrderStatus.Cancelled),
+                    cancellationToken);
+        }
 
         if (affected == 0)
         {
@@ -75,27 +93,35 @@ public class OrderRepository : IOrderRepository
 
             if (existingStatus is null)
             {
-                return (CancelOrderResult.NotFound, null);
+                return (CancelOrderResult.NotFound, null, null);
             }
 
-            return (CancelOrderResult.AlreadyCancelled, null);
+            if (existingStatus == OrderStatus.Cancelled)
+            {
+                return (CancelOrderResult.AlreadyCancelled, null, existingStatus);
+            }
+
+            return (CancelOrderResult.InvalidTransition, null, existingStatus);
         }
 
-        var orderItems = await _dbContext.OrderItems
-            .AsNoTracking()
-            .Where(item => item.OrderId == orderId)
-            .OrderBy(item => item.ProductId)
-            .ToListAsync(cancellationToken);
-
-        foreach (var item in orderItems)
+        if (restoreStock)
         {
-            await _dbContext.Products
-                .Where(product => product.Id == item.ProductId)
-                .ExecuteUpdateAsync(
-                    setters => setters.SetProperty(
-                        product => product.StockQuantity,
-                        product => product.StockQuantity + item.Quantity),
-                    cancellationToken);
+            var orderItems = await _dbContext.OrderItems
+                .AsNoTracking()
+                .Where(item => item.OrderId == orderId)
+                .OrderBy(item => item.ProductId)
+                .ToListAsync(cancellationToken);
+
+            foreach (var item in orderItems)
+            {
+                await _dbContext.Products
+                    .Where(product => product.Id == item.ProductId)
+                    .ExecuteUpdateAsync(
+                        setters => setters.SetProperty(
+                            product => product.StockQuantity,
+                            product => product.StockQuantity + item.Quantity),
+                        cancellationToken);
+            }
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -107,6 +133,6 @@ public class OrderRepository : IOrderRepository
             .Include(order => order.Items)
             .FirstAsync(order => order.Id == orderId, cancellationToken);
 
-        return (CancelOrderResult.Success, cancelledOrder);
+        return (CancelOrderResult.Success, cancelledOrder, OrderStatus.Cancelled);
     }
 }

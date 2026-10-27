@@ -4,5 +4,6 @@ public enum CancelOrderResult
 {
     Success,
     NotFound,
-    AlreadyCancelled
+    AlreadyCancelled,
+    InvalidTransition
 }

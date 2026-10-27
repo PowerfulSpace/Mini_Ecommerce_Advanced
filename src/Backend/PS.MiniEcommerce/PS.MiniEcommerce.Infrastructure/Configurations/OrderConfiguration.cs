@@ -12,7 +12,9 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.ToTable("Orders", table =>
         {
             table.HasCheckConstraint("CK_Orders_TotalAmount_NonNegative", "[TotalAmount] >= 0");
-            table.HasCheckConstraint("CK_Orders_Status_Valid", "[Status] IN ('Created', 'Cancelled')");
+            table.HasCheckConstraint(
+                "CK_Orders_Status_Valid",
+                "[Status] IN ('Created', 'Paid', 'Shipped', 'Delivered', 'Cancelled', 'Returned')");
         });
 
         builder.HasKey(order => order.Id);
@@ -27,6 +29,9 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
             .IsRequired()
             .HasConversion<string>()
             .HasMaxLength(20);
+
+        builder.Property(order => order.PaymentId)
+            .IsRequired(false);
 
         builder.Property(order => order.CreatedAtUtc)
             .IsRequired();
