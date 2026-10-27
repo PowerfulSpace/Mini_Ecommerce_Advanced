@@ -48,6 +48,8 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.HasIndex(order => new { order.UserId, order.CreatedAtUtc })
             .IsDescending(false, true);
 
+        builder.Ignore(order => order.DomainEvents);
+
         builder.HasMany(order => order.Items)
             .WithOne()
             .HasForeignKey(orderItem => orderItem.OrderId)

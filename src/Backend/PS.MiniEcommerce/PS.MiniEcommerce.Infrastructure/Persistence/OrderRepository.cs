@@ -74,7 +74,7 @@ public class OrderRepository : IOrderRepository
             .FirstOrDefaultAsync(cancellationToken);
     }
 
-    public async Task<(CancelOrderResult Result, Order? Order, OrderStatus? CurrentStatus, byte[]? NewRowVersion)> CancelAsync(
+    public async Task<(CancelOrderResult Result, Order? Order, OrderStatus? CurrentStatus, byte[]? NewRowVersion, IReadOnlyList<object> DomainEvents)> CancelAsync(
         Guid orderId,
         Guid userId,
         string ifMatch,
@@ -93,7 +93,7 @@ public class OrderRepository : IOrderRepository
         if (order is null)
         {
             await transaction.RollbackAsync(cancellationToken);
-            return (CancelOrderResult.NotFound, null, null, null);
+            return (CancelOrderResult.NotFound, null, null, null, Array.Empty<object>());
         }
 
         var currentRowVersion = _dbContext.Entry(order).Property<byte[]>("RowVersion").CurrentValue;
@@ -104,13 +104,13 @@ public class OrderRepository : IOrderRepository
         if (currentStatus == OrderStatus.Cancelled)
         {
             await transaction.RollbackAsync(cancellationToken);
-            return (CancelOrderResult.AlreadyCancelled, null, currentStatus, null);
+            return (CancelOrderResult.AlreadyCancelled, null, currentStatus, null, Array.Empty<object>());
         }
 
         if (currentStatus != OrderStatus.Created && currentStatus != OrderStatus.Paid)
         {
             await transaction.RollbackAsync(cancellationToken);
-            return (CancelOrderResult.InvalidTransition, null, currentStatus, null);
+            return (CancelOrderResult.InvalidTransition, null, currentStatus, null, Array.Empty<object>());
         }
 
         var utcNow = DateTime.UtcNow;
@@ -173,9 +173,12 @@ public class OrderRepository : IOrderRepository
 
         await transaction.CommitAsync(cancellationToken);
 
+        var domainEvents = order.DomainEvents.ToList();
+        order.ClearDomainEvents();
+
         _dbContext.ChangeTracker.Clear();
 
-        return (CancelOrderResult.Success, order, currentStatus, newRowVersion);
+        return (CancelOrderResult.Success, order, currentStatus, newRowVersion, domainEvents);
     }
 
     public async Task ConsumeReservedAsync(Guid orderId, CancellationToken cancellationToken)

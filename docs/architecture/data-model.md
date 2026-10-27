@@ -794,26 +794,29 @@ refund повторно; проигравшие попытки получают 
 
 ## 11. Схема миграций
 
-Новые миграции:
+Новые миграции (в порядке применения):
 
-1. `AddAvailableReserved` — заменяет `Product.StockQuantity` на `Available` и
-   `Reserved`; существующий запас переносится в `Available`, `Reserved = 0`.
-2. `AddCartItemIsSelected` — добавляет `CartItem.IsSelected` с default `1` для
-   существующих строк.
-3. `AddOrderStatusesAndPaymentId` (этап 13) — расширяет CHECK `Order.Status` до
+1. `AddOrderStatusesAndPaymentId` (этап 13) — расширяет CHECK `Order.Status` до
    шести статусов и добавляет `Order.PaymentId` (`uniqueidentifier NULL`) без FK.
-4. `AddPaymentsAndRefunds` (этап 19) — создаёт `Payment` и `Refund`; добавляет FK
+2. `AddAvailableReserved` (этап 14) — заменяет `Product.StockQuantity` на
+   `Available` и `Reserved`; существующий запас переносится в `Available`,
+   `Reserved = 0`.
+3. `AddCartItemIsSelected` (этап 15, часть 1) — добавляет `CartItem.IsSelected`
+   (`bit NOT NULL DEFAULT 1`) для существующих строк.
+4. `AddOrderRowVersionAndCancellations` (этап 15, часть 3) — добавляет
+   `Order.RowVersion` (`rowversion NOT NULL`) и создаёт таблицу
+   `OrderItemCancellations` (FK `OrderItemId → OrderItems.Id` с `Restrict`,
+   CHECK `Quantity > 0`, индекс по `OrderItemId`).
+5. `AddPaymentsAndRefunds` (этап 19) — создаёт `Payment` и `Refund`; добавляет FK
    `Order.PaymentId → Payment`. Выполняется после
    `AddOrderStatusesAndPaymentId`.
-5. `AddPaymentAttempts` — создаёт `PaymentAttempt`; выполняется после
+6. `AddPaymentAttempts` — создаёт `PaymentAttempt`; выполняется после
    `AddPaymentsAndRefunds`.
-6. `AddOrderItemCancellations` — создаёт `OrderItemCancellation`.
 7. `AddAuditLog` — создаёт `AuditLog`.
 
 Порядок миграций должен соответствовать зависимостям внешних ключей. FK
-`Order.PaymentId → Payment` создаётся в `AddPaymentsAndRefunds`. Отдельная
-миграция `AddOrderRowVersionAndPaymentId` не создаётся: поле `PaymentId` уже
-добавлено в `AddOrderStatusesAndPaymentId`.
+`Order.PaymentId → Payment` создаётся в `AddPaymentsAndRefunds`. Поле
+`Order.PaymentId` уже добавлено в `AddOrderStatusesAndPaymentId`.
 
 ## 12. Будущее развитие
 

@@ -30,6 +30,10 @@
   [ADR-005](adr/ADR-005-stock-reservations.md).
 - Частичный checkout и частичная отмена определены в
   [ADR-006](adr/ADR-006-partial-checkout-and-cancellation.md).
+- `Order.RowVersion` — shadow property EF (не публичное свойство Domain), как
+  `Cart.RowVersion`; используется для `If-Match` на отмене. См.
+  [ADR-006](adr/ADR-006-partial-checkout-and-cancellation.md),
+  [data-model.md](architecture/data-model.md) §4.5.
 - Доменные события публикуются через MediatR после commit, без outbox; см.
   [ADR-007](adr/ADR-007-domain-events.md).
 - Платежи и их идемпотентность определены в
@@ -554,6 +558,19 @@ MVP+ не включает:
 - `PaymentAttempt` и `CheckoutAttempt` не очищаются автоматически.
 - Уведомления, промо, скидки, купоны и налоги не реализованы.
 - Частичный возврат после доставки не поддерживается.
+- Replay checkout и ETag заказа: повтор checkout (replay) возвращает текущий
+  `Order.RowVersion` для попыток с `OrderId`, а не ETag из сохранённого
+  `ResponsePayload`; для попыток без `OrderId` (созданных до этапа 15) ETag не
+  возвращается. Причина: `CheckoutAttempt.ResponsePayload` не сохранял ETag
+  заказа до этапа 15. Исправление (сохранение ETag в payload) — вне MVP+ или
+  отдельный этап.
+- `ConsumeReservedAsync` и `CancelledQuantity`: на этапе 19 confirm должен
+  учитывать `Quantity - CancelledQuantity` для каждой позиции; текущий
+  `ConsumeReservedAsync` читает `OrderItem.Quantity` без учёта
+  `OrderItemCancellation`. Контракт метода будет уточнён на этапе 19.
+- `OrderItemCancellation.Reason`: `Reason` не передаётся через API (body
+  `api.md` его не описывает); поле nullable и заполняется `null` из API.
+  Внутренние сценарии могут заполнять позже.
 
 Примечание: путь «недостижимого» конфликта D2 теперь возвращает временный
 `503 checkout_retry` (попытка остаётся `InProgress`), а не `500`.

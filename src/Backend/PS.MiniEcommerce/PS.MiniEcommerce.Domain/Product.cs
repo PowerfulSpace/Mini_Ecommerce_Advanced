@@ -7,6 +7,8 @@ public class Product
     private const int MaxNameLength = 200;
     private const int MaxDescriptionLength = 2000;
 
+    private readonly List<object> _domainEvents = new();
+
     public Guid Id { get; private set; }
 
     public string Name { get; private set; }
@@ -22,6 +24,8 @@ public class Product
     public bool IsActive { get; private set; }
 
     public DateTime CreatedAtUtc { get; private set; }
+
+    public IReadOnlyCollection<object> DomainEvents => _domainEvents.AsReadOnly();
 
     private Product(
         Guid id,
@@ -151,6 +155,11 @@ public class Product
 
         Available = newAvailable;
         EnsureStockInvariants();
+    }
+
+    public void ClearDomainEvents()
+    {
+        _domainEvents.Clear();
     }
 
     private static void EnsurePositiveQuantity(int quantity)

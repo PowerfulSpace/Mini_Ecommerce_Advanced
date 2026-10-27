@@ -1,9 +1,13 @@
+using MediatR;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using PS.MiniEcommerce.Application.Events;
+using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Infrastructure;
 
 namespace PS.MiniEcommerce.IntegrationTests;
@@ -13,15 +17,21 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
     private readonly string _connectionString;
     private readonly string _environment;
     private readonly ISaveChangesInterceptor? _saveChangesInterceptor;
+    private readonly NotificationCapture? _notificationCapture;
+    private readonly Action<IServiceCollection>? _configureTestServices;
 
     public CustomWebApplicationFactory(
         string connectionString,
         string environment = "Development",
-        ISaveChangesInterceptor? saveChangesInterceptor = null)
+        ISaveChangesInterceptor? saveChangesInterceptor = null,
+        NotificationCapture? notificationCapture = null,
+        Action<IServiceCollection>? configureTestServices = null)
     {
         _connectionString = connectionString;
         _environment = environment;
         _saveChangesInterceptor = saveChangesInterceptor;
+        _notificationCapture = notificationCapture;
+        _configureTestServices = configureTestServices;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -43,5 +53,53 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
                 }
             });
         });
+
+        builder.ConfigureTestServices(services =>
+        {
+            if (_notificationCapture is not null)
+            {
+                services.AddSingleton(_notificationCapture);
+                AddCaptureHandlers(services);
+            }
+
+            _configureTestServices?.Invoke(services);
+        });
+    }
+
+    private static void AddCaptureHandlers(IServiceCollection services)
+    {
+        services.AddSingleton<
+            INotificationHandler<DomainEventNotification<object>>,
+            CaptureNotificationHandler<object>>();
+        services.AddSingleton<
+            INotificationHandler<DomainEventNotification<OrderPlaced>>,
+            CaptureNotificationHandler<OrderPlaced>>();
+        services.AddSingleton<
+            INotificationHandler<DomainEventNotification<OrderPaid>>,
+            CaptureNotificationHandler<OrderPaid>>();
+        services.AddSingleton<
+            INotificationHandler<DomainEventNotification<OrderShipped>>,
+            CaptureNotificationHandler<OrderShipped>>();
+        services.AddSingleton<
+            INotificationHandler<DomainEventNotification<OrderDelivered>>,
+            CaptureNotificationHandler<OrderDelivered>>();
+        services.AddSingleton<
+            INotificationHandler<DomainEventNotification<OrderCancelled>>,
+            CaptureNotificationHandler<OrderCancelled>>();
+        services.AddSingleton<
+            INotificationHandler<DomainEventNotification<OrderReturned>>,
+            CaptureNotificationHandler<OrderReturned>>();
+        services.AddSingleton<
+            INotificationHandler<DomainEventNotification<PaymentConfirmed>>,
+            CaptureNotificationHandler<PaymentConfirmed>>();
+        services.AddSingleton<
+            INotificationHandler<DomainEventNotification<PaymentRefunded>>,
+            CaptureNotificationHandler<PaymentRefunded>>();
+        services.AddSingleton<
+            INotificationHandler<DomainEventNotification<StockAdjusted>>,
+            CaptureNotificationHandler<StockAdjusted>>();
+        services.AddSingleton<
+            INotificationHandler<DomainEventNotification<ProductDeactivated>>,
+            CaptureNotificationHandler<ProductDeactivated>>();
     }
 }

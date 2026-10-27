@@ -1,4 +1,5 @@
 using PS.MiniEcommerce.Domain;
+using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Exceptions;
 
 namespace PS.MiniEcommerce.UnitTests.Domain;
@@ -502,6 +503,145 @@ public class OrderTests
 
         Assert.Throws<DomainValidationException>(() => item.AddCancellation(1, FixedUtcNow));
         Assert.Equal(1, item.CancelledQuantity);
+    }
+
+    [Fact]
+    public void Create_RaisesOrderPlaced()
+    {
+        var order = CreateOrder();
+
+        var orderPlaced = Assert.Single(order.DomainEvents.OfType<OrderPlaced>());
+        Assert.Equal(order.Id, orderPlaced.OrderId);
+        Assert.Equal(UserId, orderPlaced.UserId);
+        Assert.Equal(10m, orderPlaced.TotalAmount.Amount);
+        Assert.Equal(1, orderPlaced.ItemCount);
+        Assert.Equal(FixedUtcNow, orderPlaced.OccurredAtUtc);
+    }
+
+    [Fact]
+    public void CancelItems_WithPartialQuantity_RaisesOrderCancelledWithNewItems()
+    {
+        var order = Order.Create(
+            UserId,
+            new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 2) },
+            FixedUtcNow);
+        var item = Assert.Single(order.Items);
+        order.ClearDomainEvents();
+
+        order.CancelItems(new[] { (item.Id, 1) }, FixedUtcNow);
+
+        var orderCancelled = Assert.Single(order.DomainEvents.OfType<OrderCancelled>());
+        Assert.False(orderCancelled.IsFullCancellation);
+        var cancelledItem = Assert.Single(orderCancelled.Items);
+        Assert.Equal(item.Id, cancelledItem.OrderItemId);
+        Assert.Equal(ProductA, cancelledItem.ProductId);
+        Assert.Equal(1, cancelledItem.Quantity);
+        Assert.Equal(FixedUtcNow, orderCancelled.OccurredAtUtc);
+    }
+
+    [Fact]
+    public void CancelItems_AfterPreviousCancellation_RaisesOnlyNewlyCancelledItems()
+    {
+        var order = Order.Create(
+            UserId,
+            new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 3) },
+            FixedUtcNow);
+        var item = Assert.Single(order.Items);
+        order.CancelItems(new[] { (item.Id, 1) }, FixedUtcNow);
+        order.ClearDomainEvents();
+
+        order.CancelItems(new[] { (item.Id, 1) }, FixedUtcNow);
+
+        var orderCancelled = Assert.Single(order.DomainEvents.OfType<OrderCancelled>());
+        Assert.False(orderCancelled.IsFullCancellation);
+        var cancelledItem = Assert.Single(orderCancelled.Items);
+        Assert.Equal(item.Id, cancelledItem.OrderItemId);
+        Assert.Equal(1, cancelledItem.Quantity);
+    }
+
+    [Fact]
+    public void CancelItems_WhenAllRemainingQuantityCancelled_RaisesFullOrderCancelled()
+    {
+        var order = Order.Create(
+            UserId,
+            new[] { new OrderItemData(ProductA, "Widget", Money.FromDecimal(10m), 2) },
+            FixedUtcNow);
+        var item = Assert.Single(order.Items);
+        order.ClearDomainEvents();
+
+        order.CancelItems(new[] { (item.Id, 2) }, FixedUtcNow);
+
+        var orderCancelled = Assert.Single(order.DomainEvents.OfType<OrderCancelled>());
+        Assert.True(orderCancelled.IsFullCancellation);
+    }
+
+    [Fact]
+    public void Cancel_RaisesSingleOrderCancelled()
+    {
+        var order = CreateOrder();
+        order.ClearDomainEvents();
+
+        order.Cancel(FixedUtcNow);
+
+        Assert.Single(order.DomainEvents.OfType<OrderCancelled>());
+    }
+
+    [Fact]
+    public void MarkPaid_RaisesOrderPaid()
+    {
+        var order = CreateOrder(Guid.NewGuid());
+        order.ClearDomainEvents();
+
+        order.MarkPaid(FixedUtcNow);
+
+        var orderPaid = Assert.Single(order.DomainEvents.OfType<OrderPaid>());
+        Assert.Equal(order.Id, orderPaid.OrderId);
+        Assert.Equal(UserId, orderPaid.UserId);
+        Assert.Equal(FixedUtcNow, orderPaid.OccurredAtUtc);
+    }
+
+    [Fact]
+    public void Ship_RaisesOrderShipped()
+    {
+        var order = CreatePaidOrder();
+        order.ClearDomainEvents();
+
+        order.Ship(FixedUtcNow);
+
+        Assert.Single(order.DomainEvents.OfType<OrderShipped>());
+    }
+
+    [Fact]
+    public void Deliver_RaisesOrderDelivered()
+    {
+        var order = CreateShippedOrder();
+        order.ClearDomainEvents();
+
+        order.Deliver(FixedUtcNow);
+
+        Assert.Single(order.DomainEvents.OfType<OrderDelivered>());
+    }
+
+    [Fact]
+    public void Return_RaisesOrderReturned()
+    {
+        var order = CreateDeliveredOrder();
+        order.ClearDomainEvents();
+
+        order.Return(FixedUtcNow);
+
+        Assert.Single(order.DomainEvents.OfType<OrderReturned>());
+    }
+
+    [Fact]
+    public void ClearDomainEvents_RemovesAllEvents()
+    {
+        var order = CreateOrder();
+        Assert.NotEmpty(order.DomainEvents);
+
+        order.ClearDomainEvents();
+
+        Assert.Empty(order.DomainEvents);
     }
 
     private static Order CreateOrder(Guid? paymentId = null) =>

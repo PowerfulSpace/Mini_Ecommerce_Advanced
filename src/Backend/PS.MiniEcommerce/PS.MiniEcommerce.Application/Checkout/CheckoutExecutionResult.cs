@@ -5,4 +5,5 @@ public sealed record CheckoutExecutionResult(
     int ResponseStatusCode,
     string ResponsePayload,
     Guid? OrderId,
-    byte[]? NewOrderRowVersion);
+    byte[]? NewOrderRowVersion,
+    IReadOnlyList<object> DomainEvents);

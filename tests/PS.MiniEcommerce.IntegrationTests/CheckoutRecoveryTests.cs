@@ -101,9 +101,11 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         var etag = await AddItemToAliceCartAsync(productId, quantity: 1);
 
         var interceptor = new FailOrderSaveInterceptor();
+        var capture = new NotificationCapture();
         using var factory = new CustomWebApplicationFactory(
             _fixture.ConnectionString,
-            saveChangesInterceptor: interceptor);
+            saveChangesInterceptor: interceptor,
+            notificationCapture: capture);
         using var client = factory.CreateClient();
 
         const string idempotencyKey = "uncertain-commit-1";
@@ -127,6 +129,8 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         Assert.Equal(stockBefore.Available, stockAfterFirst.Available);
         Assert.Equal(stockBefore.Reserved, stockAfterFirst.Reserved);
         Assert.Equal(1, await GetAliceCartItemCountAsync());
+        Assert.Empty(capture.Events);
+        Assert.Null(capture.OrderPlacedWasVisibleAfterCommit);
 
         var second = await client.SendAsync(CreateCheckoutRequest(idempotencyKey, etag));
 

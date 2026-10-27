@@ -45,5 +45,7 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
 
         builder.Property(product => product.CreatedAtUtc)
             .IsRequired();
+
+        builder.Ignore(product => product.DomainEvents);
     }
 }

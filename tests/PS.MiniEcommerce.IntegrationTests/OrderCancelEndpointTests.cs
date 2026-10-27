@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using PS.MiniEcommerce.Domain;
+using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Infrastructure;
 using PS.MiniEcommerce.IntegrationTests.Fixtures;
 
@@ -17,13 +18,17 @@ public class OrderCancelEndpointTests : IAsyncLifetime
     private const string ValidIfMatch = "\"AQIDBAUGBwg=\"";
 
     private readonly TestDatabaseFixture _fixture;
+    private readonly NotificationCapture _capture;
     private readonly CustomWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
     public OrderCancelEndpointTests(TestDatabaseFixture fixture)
     {
         _fixture = fixture;
-        _factory = new CustomWebApplicationFactory(fixture.ConnectionString);
+        _capture = new NotificationCapture();
+        _factory = new CustomWebApplicationFactory(
+            fixture.ConnectionString,
+            notificationCapture: _capture);
         _client = _factory.CreateClient();
     }
 
@@ -57,6 +62,13 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         var stockAfterCancel = await GetStockAsync(WirelessMouse);
         Assert.Equal(stockAfterCheckout.Available + 2, stockAfterCancel.Available);
         Assert.Equal(0, stockAfterCancel.Reserved);
+
+        var orderCancelled = Assert.Single(_capture.Events.OfType<OrderCancelled>());
+        Assert.Equal(orderId, orderCancelled.OrderId);
+        Assert.True(orderCancelled.IsFullCancellation);
+        var cancelledItem = Assert.Single(orderCancelled.Items);
+        Assert.Equal(2, cancelledItem.Quantity);
+        Assert.True(_capture.OrderCancelledWasVisibleAfterCommit);
     }
 
     [Fact]
@@ -272,6 +284,13 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         var stockAfterCancel = await GetStockAsync(WirelessMouse);
         Assert.Equal(stockAfterCheckout.Available + 2, stockAfterCancel.Available);
         Assert.Equal(stockAfterCheckout.Reserved, stockAfterCancel.Reserved);
+
+        var orderCancelled = Assert.Single(_capture.Events.OfType<OrderCancelled>());
+        Assert.Equal(orderId, orderCancelled.OrderId);
+        Assert.True(orderCancelled.IsFullCancellation);
+        var cancelledItem = Assert.Single(orderCancelled.Items);
+        Assert.Equal(2, cancelledItem.Quantity);
+        Assert.True(_capture.OrderCancelledWasVisibleAfterCommit);
     }
 
     [Fact]

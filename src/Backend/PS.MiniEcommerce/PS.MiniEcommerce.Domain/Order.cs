@@ -1,3 +1,4 @@
+using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Exceptions;
 
 namespace PS.MiniEcommerce.Domain;
@@ -5,6 +6,7 @@ namespace PS.MiniEcommerce.Domain;
 public class Order
 {
     private readonly List<OrderItem> _items = new();
+    private readonly List<object> _domainEvents = new();
 
     public Guid Id { get; private set; }
 
@@ -19,6 +21,8 @@ public class Order
     public Money TotalAmount { get; private set; }
 
     public IReadOnlyCollection<OrderItem> Items => _items.AsReadOnly();
+
+    public IReadOnlyCollection<object> DomainEvents => _domainEvents.AsReadOnly();
 
     private Order()
     {
@@ -61,10 +65,22 @@ public class Order
             Money.Zero,
             (total, item) => total + item.UnitPrice * item.Quantity);
 
+        order.RaiseDomainEvent(new OrderPlaced(
+            order.Id,
+            order.UserId,
+            order.TotalAmount,
+            order._items.Count,
+            utcNow));
+
         return order;
     }
 
     public void MarkPaid()
+    {
+        MarkPaid(DateTime.UtcNow);
+    }
+
+    public void MarkPaid(DateTime utcNow)
     {
         EnsureTransition(OrderStatus.Created, OrderStatus.Paid);
 
@@ -76,18 +92,31 @@ public class Order
         }
 
         Status = OrderStatus.Paid;
+        RaiseDomainEvent(new OrderPaid(Id, UserId, utcNow));
     }
 
     public void Ship()
     {
+        Ship(DateTime.UtcNow);
+    }
+
+    public void Ship(DateTime utcNow)
+    {
         EnsureTransition(OrderStatus.Paid, OrderStatus.Shipped);
         Status = OrderStatus.Shipped;
+        RaiseDomainEvent(new OrderShipped(Id, UserId, utcNow));
     }
 
     public void Deliver()
     {
+        Deliver(DateTime.UtcNow);
+    }
+
+    public void Deliver(DateTime utcNow)
+    {
         EnsureTransition(OrderStatus.Shipped, OrderStatus.Delivered);
         Status = OrderStatus.Delivered;
+        RaiseDomainEvent(new OrderDelivered(Id, UserId, utcNow));
     }
 
     public void Cancel()
@@ -151,12 +180,39 @@ public class Order
         {
             Status = OrderStatus.Cancelled;
         }
+
+        var cancelledItems = targets
+            .Select(target => new CancelledItem(target.Item.Id, target.Item.ProductId, target.Quantity))
+            .ToList();
+
+        RaiseDomainEvent(new OrderCancelled(
+            Id,
+            UserId,
+            Status == OrderStatus.Cancelled,
+            cancelledItems,
+            utcNow));
     }
 
     public void Return()
     {
+        Return(DateTime.UtcNow);
+    }
+
+    public void Return(DateTime utcNow)
+    {
         EnsureTransition(OrderStatus.Delivered, OrderStatus.Returned);
         Status = OrderStatus.Returned;
+        RaiseDomainEvent(new OrderReturned(Id, UserId, utcNow));
+    }
+
+    public void ClearDomainEvents()
+    {
+        _domainEvents.Clear();
+    }
+
+    private void RaiseDomainEvent(object domainEvent)
+    {
+        _domainEvents.Add(domainEvent);
     }
 
     private void EnsureCancellable()

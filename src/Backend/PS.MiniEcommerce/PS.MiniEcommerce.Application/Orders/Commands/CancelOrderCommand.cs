@@ -10,4 +10,7 @@ public sealed record CancelOrderCommand(
     string IfMatch,
     IReadOnlyList<CancelOrderItemDto>? Items = null) : IRequest<CancelOrderResponse>;
 
-public sealed record CancelOrderResponse(OrderDto Order, byte[] RowVersion);
+public sealed record CancelOrderResponse(
+    OrderDto Order,
+    byte[] RowVersion,
+    IReadOnlyList<object> DomainEvents);

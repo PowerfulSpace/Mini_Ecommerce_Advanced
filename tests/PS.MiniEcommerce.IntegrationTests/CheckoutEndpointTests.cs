@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using PS.MiniEcommerce.Domain;
+using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Infrastructure;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 using PS.MiniEcommerce.Infrastructure.Seed;
@@ -18,13 +19,17 @@ public class CheckoutEndpointTests : IAsyncLifetime
     private const string WirelessMouse = "Wireless Mouse";
 
     private readonly TestDatabaseFixture _fixture;
+    private readonly NotificationCapture _capture;
     private readonly CustomWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
     public CheckoutEndpointTests(TestDatabaseFixture fixture)
     {
         _fixture = fixture;
-        _factory = new CustomWebApplicationFactory(fixture.ConnectionString);
+        _capture = new NotificationCapture();
+        _factory = new CustomWebApplicationFactory(
+            fixture.ConnectionString,
+            notificationCapture: _capture);
         _client = _factory.CreateClient();
     }
 
@@ -68,6 +73,13 @@ public class CheckoutEndpointTests : IAsyncLifetime
         Assert.Equal(CheckoutAttemptStatus.Completed, attempt.Status);
         Assert.Equal(201, attempt.ResponseStatusCode);
         Assert.NotNull(attempt.OrderId);
+
+        var orderPlaced = Assert.Single(_capture.Events.OfType<OrderPlaced>());
+        Assert.Equal(order.Id, orderPlaced.OrderId);
+        Assert.Equal(19.99m, orderPlaced.TotalAmount.Amount);
+        Assert.Equal(1, orderPlaced.ItemCount);
+        Assert.True(_capture.OrderPlacedWasVisibleAfterCommit);
+        Assert.DoesNotContain(_capture.Events, domainEvent => domainEvent is ProductDeactivated);
     }
 
     [Fact]

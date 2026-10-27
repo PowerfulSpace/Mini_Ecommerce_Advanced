@@ -243,7 +243,8 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
                     ResponseStatusCode: existing.ResponseStatusCode!.Value,
                     ResponsePayload: existing.ResponsePayload!,
                     OrderId: existing.OrderId,
-                    NewOrderRowVersion: existingOrderRowVersion);
+                    NewOrderRowVersion: existingOrderRowVersion,
+                    DomainEvents: Array.Empty<object>());
             }
 
             await transaction.CommitAsync(cancellationToken);
@@ -261,12 +262,16 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
             .Select(createdOrder => EF.Property<byte[]>(createdOrder, "RowVersion"))
             .FirstAsync(cancellationToken);
 
+        var domainEvents = order.DomainEvents.ToList();
+        order.ClearDomainEvents();
+
         return new CheckoutExecutionResult(
             Success: true,
             ResponseStatusCode: CreatedStatusCode,
             ResponsePayload: responsePayload,
             OrderId: order.Id,
-            NewOrderRowVersion: newRowVersion);
+            NewOrderRowVersion: newRowVersion,
+            DomainEvents: domainEvents);
     }
 
     private async Task<DomainConflictException?> BuildStockOrAvailabilityErrorAsync(
@@ -361,7 +366,8 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
             ResponseStatusCode: statusCode,
             ResponsePayload: responsePayload,
             OrderId: null,
-            NewOrderRowVersion: null);
+            NewOrderRowVersion: null,
+            DomainEvents: Array.Empty<object>());
     }
 
     private async Task<CheckoutExecutionResult> PersistErrorAsync(
@@ -392,7 +398,8 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
             ResponseStatusCode: statusCode,
             ResponsePayload: responsePayload,
             OrderId: null,
-            NewOrderRowVersion: null);
+            NewOrderRowVersion: null,
+            DomainEvents: Array.Empty<object>());
     }
 
     private static (int StatusCode, string Payload) MapToProblemDetails(Exception exception)

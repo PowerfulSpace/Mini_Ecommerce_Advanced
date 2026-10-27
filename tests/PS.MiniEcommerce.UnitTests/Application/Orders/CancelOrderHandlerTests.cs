@@ -1,9 +1,13 @@
+﻿using MediatR;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using PS.MiniEcommerce.Application.Abstractions.CurrentUser;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
+using PS.MiniEcommerce.Application.Events;
 using PS.MiniEcommerce.Application.Exceptions;
 using PS.MiniEcommerce.Application.Orders.Commands;
 using PS.MiniEcommerce.Domain;
+using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Exceptions;
 
 namespace PS.MiniEcommerce.UnitTests.Application.Orders;
@@ -30,9 +34,9 @@ public class CancelOrderHandlerTests
                 IfMatch,
                 Arg.Any<IReadOnlyList<(Guid OrderItemId, int Quantity)>?>(),
                 Arg.Any<CancellationToken>())
-            .Returns((CancelOrderResult.Success, (Order?)order, (OrderStatus?)OrderStatus.Created, RowVersion));
+            .Returns((CancelOrderResult.Success, (Order?)order, (OrderStatus?)OrderStatus.Created, RowVersion, Array.Empty<object>()));
 
-        var handler = new CancelOrderHandler(repository, CreateCurrentUser());
+        var handler = CreateHandler(repository);
 
         var result = await handler.Handle(new CancelOrderCommand(order.Id, IfMatch), CancellationToken.None);
 
@@ -62,9 +66,9 @@ public class CancelOrderHandlerTests
                 IfMatch,
                 Arg.Any<IReadOnlyList<(Guid OrderItemId, int Quantity)>?>(),
                 Arg.Any<CancellationToken>())
-            .Returns((CancelOrderResult.Success, (Order?)order, (OrderStatus?)OrderStatus.Created, RowVersion));
+            .Returns((CancelOrderResult.Success, (Order?)order, (OrderStatus?)OrderStatus.Created, RowVersion, Array.Empty<object>()));
 
-        var handler = new CancelOrderHandler(repository, CreateCurrentUser());
+        var handler = CreateHandler(repository);
 
         var result = await handler.Handle(
             new CancelOrderCommand(order.Id, IfMatch, new[] { new CancelOrderItemDto(itemId, 1) }),
@@ -89,7 +93,7 @@ public class CancelOrderHandlerTests
     public async Task Handle_WhenIfMatchMissing_ThrowsPreconditionRequiredWithoutCallingRepository()
     {
         var repository = Substitute.For<IOrderRepository>();
-        var handler = new CancelOrderHandler(repository, CreateCurrentUser());
+        var handler = CreateHandler(repository);
 
         var exception = await Assert.ThrowsAsync<DomainConflictException>(
             () => handler.Handle(new CancelOrderCommand(Guid.NewGuid(), string.Empty), CancellationToken.None));
@@ -114,9 +118,9 @@ public class CancelOrderHandlerTests
                 IfMatch,
                 Arg.Any<IReadOnlyList<(Guid OrderItemId, int Quantity)>?>(),
                 Arg.Any<CancellationToken>())
-            .Returns((CancelOrderResult.NotFound, (Order?)null, (OrderStatus?)null, (byte[]?)null));
+            .Returns((CancelOrderResult.NotFound, (Order?)null, (OrderStatus?)null, (byte[]?)null, Array.Empty<object>()));
 
-        var handler = new CancelOrderHandler(repository, CreateCurrentUser());
+        var handler = CreateHandler(repository);
 
         var exception = await Assert.ThrowsAsync<NotFoundException>(
             () => handler.Handle(new CancelOrderCommand(Guid.NewGuid(), IfMatch), CancellationToken.None));
@@ -135,9 +139,9 @@ public class CancelOrderHandlerTests
                 IfMatch,
                 Arg.Any<IReadOnlyList<(Guid OrderItemId, int Quantity)>?>(),
                 Arg.Any<CancellationToken>())
-            .Returns((CancelOrderResult.AlreadyCancelled, (Order?)null, (OrderStatus?)OrderStatus.Cancelled, (byte[]?)null));
+            .Returns((CancelOrderResult.AlreadyCancelled, (Order?)null, (OrderStatus?)OrderStatus.Cancelled, (byte[]?)null, Array.Empty<object>()));
 
-        var handler = new CancelOrderHandler(repository, CreateCurrentUser());
+        var handler = CreateHandler(repository);
 
         var exception = await Assert.ThrowsAsync<DomainConflictException>(
             () => handler.Handle(new CancelOrderCommand(Guid.NewGuid(), IfMatch), CancellationToken.None));
@@ -160,9 +164,9 @@ public class CancelOrderHandlerTests
                 IfMatch,
                 Arg.Any<IReadOnlyList<(Guid OrderItemId, int Quantity)>?>(),
                 Arg.Any<CancellationToken>())
-            .Returns((CancelOrderResult.InvalidTransition, (Order?)null, (OrderStatus?)status, (byte[]?)null));
+            .Returns((CancelOrderResult.InvalidTransition, (Order?)null, (OrderStatus?)status, (byte[]?)null, Array.Empty<object>()));
 
-        var handler = new CancelOrderHandler(repository, CreateCurrentUser());
+        var handler = CreateHandler(repository);
 
         var exception = await Assert.ThrowsAsync<DomainConflictException>(
             () => handler.Handle(new CancelOrderCommand(Guid.NewGuid(), IfMatch), CancellationToken.None));
@@ -171,6 +175,100 @@ public class CancelOrderHandlerTests
         Assert.Contains(status.ToString(), exception.Message);
         Assert.Contains("Cancelled", exception.Message);
     }
+
+    [Fact]
+    public async Task Handle_WhenFullCancellationSucceeds_PublishesOrderCancelled()
+    {
+        var order = CreateOrder();
+        order.Cancel(FixedUtcNow);
+        var orderCancelled = Assert.Single(order.DomainEvents.OfType<OrderCancelled>());
+
+        var repository = Substitute.For<IOrderRepository>();
+        repository
+            .CancelAsync(
+                order.Id,
+                UserId,
+                IfMatch,
+                Arg.Any<IReadOnlyList<(Guid OrderItemId, int Quantity)>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns((CancelOrderResult.Success, (Order?)order, (OrderStatus?)OrderStatus.Created, RowVersion, new object[] { orderCancelled }));
+        var mediator = Substitute.For<IMediator>();
+        var handler = CreateHandler(repository, mediator);
+
+        var result = await handler.Handle(new CancelOrderCommand(order.Id, IfMatch), CancellationToken.None);
+
+        await mediator.Received(1).Publish(
+            Arg.Is<DomainEventNotification<object>>(notification => ReferenceEquals(notification.Event, orderCancelled)),
+            Arg.Any<CancellationToken>());
+        Assert.Equal(new object[] { orderCancelled }, result.DomainEvents);
+    }
+
+    [Fact]
+    public async Task Handle_WhenPartialCancellationSucceeds_PublishesOrderCancelled()
+    {
+        var order = CreateOrder();
+        var itemId = Assert.Single(order.Items).Id;
+        order.CancelItems(new[] { (itemId, 1) }, FixedUtcNow);
+        var orderCancelled = Assert.Single(order.DomainEvents.OfType<OrderCancelled>());
+        Assert.False(orderCancelled.IsFullCancellation);
+
+        var repository = Substitute.For<IOrderRepository>();
+        repository
+            .CancelAsync(
+                order.Id,
+                UserId,
+                IfMatch,
+                Arg.Any<IReadOnlyList<(Guid OrderItemId, int Quantity)>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns((CancelOrderResult.Success, (Order?)order, (OrderStatus?)OrderStatus.Created, RowVersion, new object[] { orderCancelled }));
+        var mediator = Substitute.For<IMediator>();
+        var handler = CreateHandler(repository, mediator);
+
+        await handler.Handle(
+            new CancelOrderCommand(order.Id, IfMatch, new[] { new CancelOrderItemDto(itemId, 1) }),
+            CancellationToken.None);
+
+        await mediator.Received(1).Publish(
+            Arg.Is<DomainEventNotification<object>>(notification => ReferenceEquals(notification.Event, orderCancelled)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Handle_WhenPublishFails_ReturnsSuccessfulResult()
+    {
+        var order = CreateOrder();
+        order.Cancel(FixedUtcNow);
+        var orderCancelled = Assert.Single(order.DomainEvents.OfType<OrderCancelled>());
+
+        var repository = Substitute.For<IOrderRepository>();
+        repository
+            .CancelAsync(
+                order.Id,
+                UserId,
+                IfMatch,
+                Arg.Any<IReadOnlyList<(Guid OrderItemId, int Quantity)>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns((CancelOrderResult.Success, (Order?)order, (OrderStatus?)OrderStatus.Created, RowVersion, new object[] { orderCancelled }));
+        var mediator = Substitute.For<IMediator>();
+        mediator
+            .Publish(Arg.Any<INotification>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("Publish failed.")));
+        var handler = CreateHandler(repository, mediator);
+
+        var result = await handler.Handle(new CancelOrderCommand(order.Id, IfMatch), CancellationToken.None);
+
+        Assert.Equal(order.Id, result.Order.Id);
+        Assert.Equal(RowVersion, result.RowVersion);
+    }
+
+    private static CancelOrderHandler CreateHandler(
+        IOrderRepository repository,
+        IMediator? mediator = null) =>
+        new(
+            repository,
+            CreateCurrentUser(),
+            mediator ?? Substitute.For<IMediator>(),
+            Substitute.For<ILogger<CancelOrderHandler>>());
 
     private static Order CreateOrder(Guid? paymentId = null) =>
         Order.Create(

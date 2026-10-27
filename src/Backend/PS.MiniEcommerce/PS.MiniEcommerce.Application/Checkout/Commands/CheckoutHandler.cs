@@ -1,6 +1,8 @@
 using MediatR;
+using Microsoft.Extensions.Logging;
 using PS.MiniEcommerce.Application.Abstractions.CurrentUser;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
+using PS.MiniEcommerce.Application.Events;
 using PS.MiniEcommerce.Domain.Exceptions;
 
 namespace PS.MiniEcommerce.Application.Checkout.Commands;
@@ -15,17 +17,23 @@ public class CheckoutHandler : IRequestHandler<CheckoutCommand, CheckoutExecutio
     private readonly ICheckoutTransactionExecutor _checkoutTransactionExecutor;
     private readonly IOrderRepository _orderRepository;
     private readonly ICurrentUser _currentUser;
+    private readonly IMediator _mediator;
+    private readonly ILogger<CheckoutHandler> _logger;
 
     public CheckoutHandler(
         ICheckoutAttemptRepository checkoutAttemptRepository,
         ICheckoutTransactionExecutor checkoutTransactionExecutor,
         IOrderRepository orderRepository,
-        ICurrentUser currentUser)
+        ICurrentUser currentUser,
+        IMediator mediator,
+        ILogger<CheckoutHandler> logger)
     {
         _checkoutAttemptRepository = checkoutAttemptRepository;
         _checkoutTransactionExecutor = checkoutTransactionExecutor;
         _orderRepository = orderRepository;
         _currentUser = currentUser;
+        _mediator = mediator;
+        _logger = logger;
     }
 
     public async Task<CheckoutExecutionResult> Handle(
@@ -49,7 +57,9 @@ public class CheckoutHandler : IRequestHandler<CheckoutCommand, CheckoutExecutio
 
         if (existing is not null)
         {
-            return await HandleExistingAttemptAsync(existing, request, userId, cancellationToken);
+            return await PublishAndReturnAsync(
+                await HandleExistingAttemptAsync(existing, request, userId, cancellationToken),
+                cancellationToken);
         }
 
         var reserved = await _checkoutAttemptRepository.ReserveAsync(
@@ -73,14 +83,18 @@ public class CheckoutHandler : IRequestHandler<CheckoutCommand, CheckoutExecutio
                     "Reservation failed but no existing attempt was found.");
             }
 
-            return await HandleExistingAttemptAsync(raced, request, userId, cancellationToken);
+            return await PublishAndReturnAsync(
+                await HandleExistingAttemptAsync(raced, request, userId, cancellationToken),
+                cancellationToken);
         }
 
-        return await _checkoutTransactionExecutor.ExecuteAsync(
-            userId,
-            reserved.Id,
-            request.IfMatch,
-            utcNow,
+        return await PublishAndReturnAsync(
+            await _checkoutTransactionExecutor.ExecuteAsync(
+                userId,
+                reserved.Id,
+                request.IfMatch,
+                utcNow,
+                cancellationToken),
             cancellationToken);
     }
 
@@ -183,6 +197,36 @@ public class CheckoutHandler : IRequestHandler<CheckoutCommand, CheckoutExecutio
             ResponseStatusCode: attempt.ResponseStatusCode!.Value,
             ResponsePayload: attempt.ResponsePayload!,
             OrderId: null,
-            NewOrderRowVersion: orderRowVersion);
+            NewOrderRowVersion: orderRowVersion,
+            DomainEvents: Array.Empty<object>());
+    }
+
+    private async Task<CheckoutExecutionResult> PublishAndReturnAsync(
+        CheckoutExecutionResult result,
+        CancellationToken cancellationToken)
+    {
+        if (!result.Success)
+        {
+            return result;
+        }
+
+        foreach (var domainEvent in result.DomainEvents)
+        {
+            try
+            {
+                await _mediator.Publish(
+                    new DomainEventNotification<object>(domainEvent),
+                    cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogError(
+                    exception,
+                    "Failed to publish domain event {DomainEventType}.",
+                    domainEvent.GetType().Name);
+            }
+        }
+
+        return result;
     }
 }

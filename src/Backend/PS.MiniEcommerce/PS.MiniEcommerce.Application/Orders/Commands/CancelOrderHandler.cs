@@ -1,6 +1,8 @@
 using MediatR;
+using Microsoft.Extensions.Logging;
 using PS.MiniEcommerce.Application.Abstractions.CurrentUser;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
+using PS.MiniEcommerce.Application.Events;
 using PS.MiniEcommerce.Application.Exceptions;
 using PS.MiniEcommerce.Application.Orders.DTOs;
 using PS.MiniEcommerce.Domain;
@@ -12,11 +14,19 @@ public class CancelOrderHandler : IRequestHandler<CancelOrderCommand, CancelOrde
 {
     private readonly IOrderRepository _orderRepository;
     private readonly ICurrentUser _currentUser;
+    private readonly IMediator _mediator;
+    private readonly ILogger<CancelOrderHandler> _logger;
 
-    public CancelOrderHandler(IOrderRepository orderRepository, ICurrentUser currentUser)
+    public CancelOrderHandler(
+        IOrderRepository orderRepository,
+        ICurrentUser currentUser,
+        IMediator mediator,
+        ILogger<CancelOrderHandler> logger)
     {
         _orderRepository = orderRepository;
         _currentUser = currentUser;
+        _mediator = mediator;
+        _logger = logger;
     }
 
     public async Task<CancelOrderResponse> Handle(
@@ -31,16 +41,22 @@ public class CancelOrderHandler : IRequestHandler<CancelOrderCommand, CancelOrde
         // Created -> Cancelled releases Reserved back to Available.
         // Paid -> Cancelled restores Available only; Reserved is unchanged.
         // Refund for Paid -> Cancelled will be connected in stage 19 (ADR-008).
-        var (result, order, currentStatus, newRowVersion) = await _orderRepository.CancelAsync(
+        var (result, order, currentStatus, newRowVersion, domainEvents) = await _orderRepository.CancelAsync(
             request.OrderId,
             userId,
             request.IfMatch,
             items,
             cancellationToken);
 
+        if (result == CancelOrderResult.Success)
+        {
+            var response = new CancelOrderResponse(order!.ToDto(), newRowVersion!, domainEvents);
+            await PublishDomainEventsAsync(domainEvents, cancellationToken);
+            return response;
+        }
+
         return result switch
         {
-            CancelOrderResult.Success => new CancelOrderResponse(order!.ToDto(), newRowVersion!),
             CancelOrderResult.NotFound => throw new NotFoundException(
                 $"Order with id {request.OrderId} was not found.",
                 "order_not_found"),
@@ -52,5 +68,27 @@ public class CancelOrderHandler : IRequestHandler<CancelOrderCommand, CancelOrde
                 "invalid_order_transition"),
             _ => throw new InvalidOperationException($"Unexpected cancel result: {result}.")
         };
+    }
+
+    private async Task PublishDomainEventsAsync(
+        IReadOnlyList<object> domainEvents,
+        CancellationToken cancellationToken)
+    {
+        foreach (var domainEvent in domainEvents)
+        {
+            try
+            {
+                await _mediator.Publish(
+                    new DomainEventNotification<object>(domainEvent),
+                    cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogError(
+                    exception,
+                    "Failed to publish domain event {DomainEventType}.",
+                    domainEvent.GetType().Name);
+            }
+        }
     }
 }

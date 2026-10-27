@@ -302,4 +302,24 @@ public class ProductTests
 
         Assert.Throws<DomainValidationException>(() => product.AdjustAvailable(-1));
     }
+
+    [Fact]
+    public void Deactivate_DoesNotRaiseDomainEvents()
+    {
+        var product = CreateValidProduct();
+
+        product.Deactivate();
+
+        Assert.Empty(product.DomainEvents);
+    }
+
+    [Fact]
+    public void AdjustAvailable_DoesNotRaiseDomainEvents()
+    {
+        var product = CreateValidProduct();
+
+        product.AdjustAvailable(5);
+
+        Assert.Empty(product.DomainEvents);
+    }
 }

@@ -1,8 +1,13 @@
+﻿using MediatR;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using PS.MiniEcommerce.Application.Abstractions.CurrentUser;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Checkout;
 using PS.MiniEcommerce.Application.Checkout.Commands;
+using PS.MiniEcommerce.Application.Events;
+using PS.MiniEcommerce.Domain;
+using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Exceptions;
 
 namespace PS.MiniEcommerce.UnitTests.Application.Checkout;
@@ -172,7 +177,8 @@ public class CheckoutHandlerTests
             ResponseStatusCode: 201,
             ResponsePayload: "{\"status\":\"Created\"}",
             OrderId: Guid.NewGuid(),
-            NewOrderRowVersion: new byte[8]);
+            NewOrderRowVersion: new byte[8],
+            DomainEvents: Array.Empty<object>());
         var executor = Substitute.For<ICheckoutTransactionExecutor>();
         executor
             .ExecuteAsync(UserId, Arg.Any<Guid>(), IfMatch, Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
@@ -286,7 +292,8 @@ public class CheckoutHandlerTests
             ResponseStatusCode: 201,
             ResponsePayload: "{\"status\":\"Created\"}",
             OrderId: Guid.NewGuid(),
-            NewOrderRowVersion: new byte[8]);
+            NewOrderRowVersion: new byte[8],
+            DomainEvents: Array.Empty<object>());
         var executor = Substitute.For<ICheckoutTransactionExecutor>();
         executor
             .ExecuteAsync(UserId, resumed.Id, IfMatch, Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
@@ -364,12 +371,153 @@ public class CheckoutHandlerTests
             Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task Handle_WhenCheckoutSucceeds_PublishesDomainEvents()
+    {
+        var repository = Substitute.For<ICheckoutAttemptRepository>();
+        repository
+            .GetByUserAndKeyAsync(UserId, IdempotencyKey, Arg.Any<CancellationToken>())
+            .Returns((CheckoutAttemptData?)null);
+        repository
+            .ReserveAsync(
+                UserId,
+                IdempotencyKey,
+                Arg.Any<byte[]>(),
+                Arg.Any<DateTime>(),
+                Arg.Any<TimeSpan>(),
+                Arg.Any<CancellationToken>())
+            .Returns(CreateAttempt(CheckoutAttemptState.InProgress));
+
+        var orderPlaced = new OrderPlaced(
+            Guid.NewGuid(),
+            UserId,
+            Money.FromDecimal(10m),
+            1,
+            FixedUtcNow);
+        var mockResult = new CheckoutExecutionResult(
+            Success: true,
+            ResponseStatusCode: 201,
+            ResponsePayload: "{\"status\":\"Created\"}",
+            OrderId: Guid.NewGuid(),
+            NewOrderRowVersion: new byte[8],
+            DomainEvents: new object[] { orderPlaced });
+        var executor = Substitute.For<ICheckoutTransactionExecutor>();
+        executor
+            .ExecuteAsync(UserId, Arg.Any<Guid>(), IfMatch, Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+            .Returns(mockResult);
+        var mediator = Substitute.For<IMediator>();
+        var handler = CreateHandler(repository, executor, mediator: mediator);
+
+        var result = await handler.Handle(CreateCommand(), CancellationToken.None);
+
+        await mediator.Received(1).Publish(
+            Arg.Is<DomainEventNotification<object>>(notification => ReferenceEquals(notification.Event, orderPlaced)),
+            Arg.Any<CancellationToken>());
+        Assert.Equal(mockResult, result);
+    }
+
+    [Fact]
+    public async Task Handle_WhenExecutorFails_DoesNotPublishDomainEvents()
+    {
+        var repository = Substitute.For<ICheckoutAttemptRepository>();
+        repository
+            .GetByUserAndKeyAsync(UserId, IdempotencyKey, Arg.Any<CancellationToken>())
+            .Returns((CheckoutAttemptData?)null);
+        repository
+            .ReserveAsync(
+                UserId,
+                IdempotencyKey,
+                Arg.Any<byte[]>(),
+                Arg.Any<DateTime>(),
+                Arg.Any<TimeSpan>(),
+                Arg.Any<CancellationToken>())
+            .Returns(CreateAttempt(CheckoutAttemptState.InProgress));
+        var executor = Substitute.For<ICheckoutTransactionExecutor>();
+        executor
+            .ExecuteAsync(UserId, Arg.Any<Guid>(), IfMatch, Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<CheckoutExecutionResult>(
+                new InvalidOperationException("Executor failed.")));
+        var mediator = Substitute.For<IMediator>();
+        var handler = CreateHandler(repository, executor, mediator: mediator);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.Handle(CreateCommand(), CancellationToken.None));
+
+        await mediator.DidNotReceive().Publish(
+            Arg.Any<INotification>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Handle_WhenReplay_DoesNotPublishDomainEvents()
+    {
+        const string payload = "{\"id\":\"6f1e2a44-0000-0000-0000-000000000000\"}";
+        var repository = Substitute.For<ICheckoutAttemptRepository>();
+        repository
+            .GetByUserAndKeyAsync(UserId, IdempotencyKey, Arg.Any<CancellationToken>())
+            .Returns(CreateAttempt(CheckoutAttemptState.Completed, statusCode: 201, payload: payload));
+        var executor = Substitute.For<ICheckoutTransactionExecutor>();
+        var mediator = Substitute.For<IMediator>();
+        var handler = CreateHandler(repository, executor, mediator: mediator);
+
+        var result = await handler.Handle(CreateCommand(), CancellationToken.None);
+
+        Assert.True(result.Success);
+        Assert.Empty(result.DomainEvents);
+        await mediator.DidNotReceive().Publish(
+            Arg.Any<INotification>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Handle_WhenPublishFails_ReturnsSuccessfulResult()
+    {
+        var repository = Substitute.For<ICheckoutAttemptRepository>();
+        repository
+            .GetByUserAndKeyAsync(UserId, IdempotencyKey, Arg.Any<CancellationToken>())
+            .Returns((CheckoutAttemptData?)null);
+        repository
+            .ReserveAsync(
+                UserId,
+                IdempotencyKey,
+                Arg.Any<byte[]>(),
+                Arg.Any<DateTime>(),
+                Arg.Any<TimeSpan>(),
+                Arg.Any<CancellationToken>())
+            .Returns(CreateAttempt(CheckoutAttemptState.InProgress));
+
+        var mockResult = new CheckoutExecutionResult(
+            Success: true,
+            ResponseStatusCode: 201,
+            ResponsePayload: "{\"status\":\"Created\"}",
+            OrderId: Guid.NewGuid(),
+            NewOrderRowVersion: new byte[8],
+            DomainEvents: new object[]
+            {
+                new OrderPlaced(Guid.NewGuid(), UserId, Money.FromDecimal(10m), 1, FixedUtcNow)
+            });
+        var executor = Substitute.For<ICheckoutTransactionExecutor>();
+        executor
+            .ExecuteAsync(UserId, Arg.Any<Guid>(), IfMatch, Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+            .Returns(mockResult);
+        var mediator = Substitute.For<IMediator>();
+        mediator
+            .Publish(Arg.Any<INotification>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("Publish failed.")));
+        var handler = CreateHandler(repository, executor, mediator: mediator);
+
+        var result = await handler.Handle(CreateCommand(), CancellationToken.None);
+
+        Assert.Equal(mockResult, result);
+    }
+
     private static CheckoutCommand CreateCommand() => new(IdempotencyKey, IfMatch, Fingerprint);
 
     private static CheckoutHandler CreateHandler(
         ICheckoutAttemptRepository repository,
         ICheckoutTransactionExecutor executor,
-        IOrderRepository? orderRepository = null)
+        IOrderRepository? orderRepository = null,
+        IMediator? mediator = null)
     {
         var currentUser = Substitute.For<ICurrentUser>();
         currentUser.UserId.Returns(UserId);
@@ -378,7 +526,9 @@ public class CheckoutHandlerTests
             repository,
             executor,
             orderRepository ?? Substitute.For<IOrderRepository>(),
-            currentUser);
+            currentUser,
+            mediator ?? Substitute.For<IMediator>(),
+            Substitute.For<ILogger<CheckoutHandler>>());
     }
 
     private static CheckoutAttemptData CreateAttempt(
