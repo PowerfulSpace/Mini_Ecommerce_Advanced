@@ -82,7 +82,7 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
 
         var cart = await _dbContext.Carts
             .FromSqlInterpolated($"SELECT * FROM Carts WITH (UPDLOCK) WHERE UserId = {userId}")
-            .Include(c => c.Items)
+            .Include(c => c.Items.Where(item => item.IsSelected))
             .FirstOrDefaultAsync(cancellationToken);
 
         if (cart is null)
@@ -95,7 +95,7 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
 
         if (cart.Items.Count == 0)
         {
-            throw new DomainConflictException("Cart is empty.", "cart_empty");
+            throw new DomainConflictException("no selected items", "cart_empty");
         }
 
         var productIds = cart.Items
@@ -198,7 +198,7 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
         var order = Order.Create(userId, orderItems, utcNow);
         _dbContext.Orders.Add(order);
 
-        cart.Clear(utcNow);
+        cart.RemoveSelected(utcNow);
 
         var orderDto = order.ToDto();
         var responsePayload = JsonSerializer.Serialize(orderDto, JsonOptions);

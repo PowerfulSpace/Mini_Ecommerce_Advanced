@@ -298,6 +298,94 @@ public class CheckoutEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PostOrders_WithPartiallySelectedCart_ChecksOutOnlySelectedItems()
+    {
+        var products = await GetActiveProductsAsync(count: 3);
+        var first = products[0];
+        var second = products[1];
+        var unselected = products[2];
+
+        var etag = await AddItemToAliceCartAsync(first.Id, 1);
+        etag = await AddItemToAliceCartAsync(second.Id, 1);
+        etag = await AddItemToAliceCartAsync(unselected.Id, 1);
+        etag = await PutSelectionAsync(
+            Alice,
+            etag,
+            (first.Id, true),
+            (second.Id, true),
+            (unselected.Id, false));
+
+        var response = await _client.SendAsync(
+            CreateCheckoutRequest("checkout-partial-selection-1", etag));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var order = await response.Content.ReadFromJsonAsync<OrderResponse>();
+        Assert.NotNull(order);
+        Assert.Equal(2, order.Items.Count);
+        Assert.Contains(order.Items, item => item.ProductId == first.Id && item.Quantity == 1);
+        Assert.Contains(order.Items, item => item.ProductId == second.Id && item.Quantity == 1);
+        Assert.DoesNotContain(order.Items, item => item.ProductId == unselected.Id);
+        Assert.Equal(first.Price.Amount + second.Price.Amount, order.TotalAmount);
+
+        var remaining = Assert.Single(await GetAliceCartItemsAsync());
+        Assert.Equal(unselected.Id, remaining.ProductId);
+        Assert.Equal(1, remaining.Quantity);
+        Assert.False(remaining.IsSelected);
+
+        var firstStock = await GetStockByIdAsync(first.Id);
+        Assert.Equal(first.Available - 1, firstStock.Available);
+        Assert.Equal(1, firstStock.Reserved);
+
+        var secondStock = await GetStockByIdAsync(second.Id);
+        Assert.Equal(second.Available - 1, secondStock.Available);
+        Assert.Equal(1, secondStock.Reserved);
+
+        var unselectedStock = await GetStockByIdAsync(unselected.Id);
+        Assert.Equal(unselected.Available, unselectedStock.Available);
+        Assert.Equal(0, unselectedStock.Reserved);
+        Assert.Equal(1, await GetOrdersCountAsync());
+    }
+
+    [Fact]
+    public async Task PostOrders_WithNoSelectedItems_Returns409CartEmptyAndLeavesCartUnchanged()
+    {
+        var products = await GetActiveProductsAsync(count: 2);
+        var first = products[0];
+        var second = products[1];
+
+        var etag = await AddItemToAliceCartAsync(first.Id, 1);
+        etag = await AddItemToAliceCartAsync(second.Id, 2);
+        etag = await PutSelectionAsync(
+            Alice,
+            etag,
+            (first.Id, false),
+            (second.Id, false));
+
+        var cartBefore = await GetAliceCartItemsAsync();
+        var firstStockBefore = await GetStockByIdAsync(first.Id);
+        var secondStockBefore = await GetStockByIdAsync(second.Id);
+
+        var response = await _client.SendAsync(
+            CreateCheckoutRequest("checkout-no-selected-1", etag));
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("cart_empty", error.Code);
+        Assert.Equal("no selected items", error.Detail);
+
+        Assert.Equal(0, await GetOrdersCountAsync());
+        Assert.Equal(cartBefore, await GetAliceCartItemsAsync());
+        Assert.Equal(firstStockBefore, await GetStockByIdAsync(first.Id));
+        Assert.Equal(secondStockBefore, await GetStockByIdAsync(second.Id));
+
+        var attempt = await GetCheckoutAttemptAsync("checkout-no-selected-1");
+        Assert.NotNull(attempt);
+        Assert.Equal(CheckoutAttemptStatus.Completed, attempt.Status);
+        Assert.Equal(409, attempt.ResponseStatusCode);
+    }
+
+    [Fact]
     public async Task PostOrders_WithEmptyCart_Returns409CartEmpty()
     {
         var etag = await GetAliceCartETagAsync();
@@ -308,6 +396,7 @@ public class CheckoutEndpointTests : IAsyncLifetime
         var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
         Assert.NotNull(error);
         Assert.Equal("cart_empty", error.Code);
+        Assert.Equal("no selected items", error.Detail);
     }
 
     [Fact]
@@ -476,6 +565,29 @@ public class CheckoutEndpointTests : IAsyncLifetime
         return response.Headers.ETag!.Tag;
     }
 
+    private async Task<string> PutSelectionAsync(
+        string testUser,
+        string ifMatch,
+        params (Guid ProductId, bool IsSelected)[] selections)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Put, "/api/cart/selection")
+        {
+            Content = JsonContent.Create(new
+            {
+                items = selections.Select(selection => new
+                {
+                    productId = selection.ProductId,
+                    isSelected = selection.IsSelected
+                })
+            })
+        };
+        request.Headers.Add("X-Test-User", testUser);
+        request.Headers.Add("If-Match", ifMatch);
+        var response = await _client.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+        return response.Headers.ETag!.Tag;
+    }
+
     private static HttpRequestMessage CreateCheckoutRequest(string? idempotencyKey, string? ifMatch) =>
         CreateCheckoutRequest(Alice, idempotencyKey, ifMatch);
 
@@ -565,6 +677,35 @@ public class CheckoutEndpointTests : IAsyncLifetime
         return new StockSnapshot(stock.Available, stock.Reserved);
     }
 
+    private async Task<StockSnapshot> GetStockByIdAsync(Guid productId)
+    {
+        await using var context = CreateContext();
+        var stock = await context.Products
+            .AsNoTracking()
+            .Where(product => product.Id == productId)
+            .Select(product => new { product.Available, product.Reserved })
+            .FirstAsync();
+
+        return new StockSnapshot(stock.Available, stock.Reserved);
+    }
+
+    private async Task<List<CartItemSnapshot>> GetAliceCartItemsAsync()
+    {
+        await using var context = CreateContext();
+        var cartId = await GetAliceCartIdAsync(context);
+        if (cartId is null)
+        {
+            return new List<CartItemSnapshot>();
+        }
+
+        return await context.CartItems
+            .AsNoTracking()
+            .Where(item => item.CartId == cartId)
+            .OrderBy(item => item.ProductId)
+            .Select(item => new CartItemSnapshot(item.ProductId, item.Quantity, item.IsSelected))
+            .ToListAsync();
+    }
+
     private async Task<int> GetOrdersCountAsync()
     {
         await using var context = CreateContext();
@@ -612,6 +753,8 @@ public class CheckoutEndpointTests : IAsyncLifetime
     private sealed record ProductSnapshot(Guid Id, string Name, Money Price, int Available, int Reserved);
 
     private sealed record StockSnapshot(int Available, int Reserved);
+
+    private sealed record CartItemSnapshot(Guid ProductId, int Quantity, bool IsSelected);
 
     private sealed record OrderResponse(Guid Id, string Status, DateTime CreatedAtUtc, decimal TotalAmount, List<OrderItemResponse> Items);
 

@@ -165,6 +165,57 @@ public class CheckoutRollbackTests : IAsyncLifetime
         Assert.Equal(409, attempt.ResponseStatusCode);
     }
 
+    [Fact]
+    public async Task PostOrders_WithPartiallySelectedCartAndSelectedItemInsufficientStock_RollsBackEverything()
+    {
+        var products = await GetActiveProductsAsync(count: 3);
+        var insufficient = products[0];
+        var sufficient = products[1];
+        var unselected = products[2];
+
+        var etag = await AddItemToAliceCartAsync(insufficient.Id, 1);
+        etag = await AddItemToAliceCartAsync(sufficient.Id, 1);
+        etag = await AddItemToAliceCartAsync(unselected.Id, 1);
+        etag = await PutSelectionAsync(
+            etag,
+            (insufficient.Id, true),
+            (sufficient.Id, true),
+            (unselected.Id, false));
+
+        await SetAvailableAsync(insufficient.Id, 0);
+
+        var response = await _client.SendAsync(
+            CreateCheckoutRequest("checkout-partial-insufficient-1", etag));
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("insufficient_stock", error.Code);
+        Assert.Equal(
+            $"Insufficient stock for: {insufficient.Name} ({insufficient.Id})",
+            error.Detail);
+
+        Assert.Equal(0, await GetOrdersCountAsync());
+        Assert.Equal(0, await GetAvailableByIdAsync(insufficient.Id));
+        Assert.Equal(0, await GetReservedByIdAsync(insufficient.Id));
+        Assert.Equal(sufficient.Available, await GetAvailableByIdAsync(sufficient.Id));
+        Assert.Equal(0, await GetReservedByIdAsync(sufficient.Id));
+        Assert.Equal(unselected.Available, await GetAvailableByIdAsync(unselected.Id));
+        Assert.Equal(0, await GetReservedByIdAsync(unselected.Id));
+
+        var cartItems = await GetAliceCartItemsAsync();
+        Assert.Equal(3, cartItems.Count);
+        Assert.All(cartItems, item => Assert.Equal(1, item.Quantity));
+        Assert.Single(cartItems, item => item.ProductId == insufficient.Id && item.IsSelected);
+        Assert.Single(cartItems, item => item.ProductId == sufficient.Id && item.IsSelected);
+        Assert.Single(cartItems, item => item.ProductId == unselected.Id && !item.IsSelected);
+
+        var attempt = await GetCheckoutAttemptAsync("checkout-partial-insufficient-1");
+        Assert.NotNull(attempt);
+        Assert.Equal(CheckoutAttemptStatus.Completed, attempt.Status);
+        Assert.Equal(409, attempt.ResponseStatusCode);
+    }
+
     private async Task<string> GetAliceCartETagAsync()
     {
         var request = new HttpRequestMessage(HttpMethod.Get, "/api/cart");
@@ -183,6 +234,28 @@ public class CheckoutRollbackTests : IAsyncLifetime
         };
         request.Headers.Add("X-Test-User", Alice);
         request.Headers.Add("If-Match", etag);
+        var response = await _client.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+        return response.Headers.ETag!.Tag;
+    }
+
+    private async Task<string> PutSelectionAsync(
+        string ifMatch,
+        params (Guid ProductId, bool IsSelected)[] selections)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Put, "/api/cart/selection")
+        {
+            Content = JsonContent.Create(new
+            {
+                items = selections.Select(selection => new
+                {
+                    productId = selection.ProductId,
+                    isSelected = selection.IsSelected
+                })
+            })
+        };
+        request.Headers.Add("X-Test-User", Alice);
+        request.Headers.Add("If-Match", ifMatch);
         var response = await _client.SendAsync(request);
         response.EnsureSuccessStatusCode();
         return response.Headers.ETag!.Tag;
@@ -332,6 +405,23 @@ public class CheckoutRollbackTests : IAsyncLifetime
             .CountAsync(item => item.CartId == cartId);
     }
 
+    private async Task<List<CartItemSnapshot>> GetAliceCartItemsAsync()
+    {
+        await using var context = CreateContext();
+        var cartId = await GetAliceCartIdAsync(context);
+        if (cartId is null)
+        {
+            return new List<CartItemSnapshot>();
+        }
+
+        return await context.CartItems
+            .AsNoTracking()
+            .Where(item => item.CartId == cartId)
+            .OrderBy(item => item.ProductId)
+            .Select(item => new CartItemSnapshot(item.ProductId, item.Quantity, item.IsSelected))
+            .ToListAsync();
+    }
+
     private async Task<CheckoutAttempt?> GetCheckoutAttemptAsync(string idempotencyKey)
     {
         await using var context = CreateContext();
@@ -359,6 +449,8 @@ public class CheckoutRollbackTests : IAsyncLifetime
             .Options);
 
     private sealed record ProductSnapshot(Guid Id, string Name, int Available);
+
+    private sealed record CartItemSnapshot(Guid ProductId, int Quantity, bool IsSelected);
 
     private sealed record ErrorResponse(string Code, string Detail);
 }

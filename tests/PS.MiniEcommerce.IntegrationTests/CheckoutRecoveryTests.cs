@@ -181,6 +181,78 @@ public class CheckoutRecoveryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PostOrders_PartialCheckoutReplaySameKey_ReturnsSavedResultWithoutSecondOrder()
+    {
+        var firstProductId = await GetActiveProductIdAsync(WirelessMouse);
+        var secondProductId = await GetActiveProductIdAsync("Ergonomic Keyboard");
+        var unselectedProductId = await GetActiveProductIdAsync("USB-C Cable");
+
+        var etag = await AddItemToAliceCartAsync(firstProductId, quantity: 1);
+        etag = await AddItemToAliceCartAsync(secondProductId, quantity: 1);
+        etag = await AddItemToAliceCartAsync(unselectedProductId, quantity: 1);
+        etag = await PutSelectionAsync(
+            etag,
+            (firstProductId, true),
+            (secondProductId, true),
+            (unselectedProductId, false));
+
+        var firstStock = await GetStockAsync(WirelessMouse);
+        var secondStock = await GetStockAsync("Ergonomic Keyboard");
+        var unselectedStock = await GetStockAsync("USB-C Cable");
+
+        const string idempotencyKey = "checkout-partial-replay-1";
+        var first = await _client.SendAsync(CreateCheckoutRequest(idempotencyKey, etag));
+
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        var body1 = await first.Content.ReadAsStringAsync();
+
+        using (var document = JsonDocument.Parse(body1))
+        {
+            var items = document.RootElement.GetProperty("items");
+            Assert.Equal(2, items.GetArrayLength());
+
+            var productIds = items
+                .EnumerateArray()
+                .Select(item => item.GetProperty("productId").GetGuid())
+                .ToList();
+
+            Assert.Contains(firstProductId, productIds);
+            Assert.Contains(secondProductId, productIds);
+            Assert.DoesNotContain(unselectedProductId, productIds);
+        }
+
+        var remaining = Assert.Single(await GetAliceCartItemsAsync());
+        Assert.Equal(unselectedProductId, remaining.ProductId);
+        Assert.False(remaining.IsSelected);
+
+        var firstStockAfter = await GetStockAsync(WirelessMouse);
+        Assert.Equal(firstStock.Available - 1, firstStockAfter.Available);
+        Assert.Equal(firstStock.Reserved + 1, firstStockAfter.Reserved);
+
+        var secondStockAfter = await GetStockAsync("Ergonomic Keyboard");
+        Assert.Equal(secondStock.Available - 1, secondStockAfter.Available);
+        Assert.Equal(secondStock.Reserved + 1, secondStockAfter.Reserved);
+
+        var unselectedStockAfter = await GetStockAsync("USB-C Cable");
+        Assert.Equal(unselectedStock.Available, unselectedStockAfter.Available);
+        Assert.Equal(unselectedStock.Reserved, unselectedStockAfter.Reserved);
+
+        var second = await _client.SendAsync(CreateCheckoutRequest(idempotencyKey, etag));
+
+        Assert.Equal(HttpStatusCode.Created, second.StatusCode);
+        var body2 = await second.Content.ReadAsStringAsync();
+        Assert.Equal(body1, body2);
+        Assert.Null(second.Headers.Location);
+        Assert.Null(second.Headers.ETag);
+
+        Assert.Equal(1, await GetOrdersCountAsync());
+        Assert.Single(await GetAliceCartItemsAsync());
+        Assert.Equal(firstStockAfter, await GetStockAsync(WirelessMouse));
+        Assert.Equal(secondStockAfter, await GetStockAsync("Ergonomic Keyboard"));
+        Assert.Equal(unselectedStockAfter, await GetStockAsync("USB-C Cable"));
+    }
+
+    [Fact]
     public async Task PostOrders_TwoConcurrentCheckouts_SameKey_OneSucceedsOneWaitsOrConflicts()
     {
         var productId = await GetActiveProductIdAsync(WirelessMouse);
@@ -230,6 +302,28 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         addResponse.EnsureSuccessStatusCode();
 
         return addResponse.Headers.ETag!.Tag;
+    }
+
+    private async Task<string> PutSelectionAsync(
+        string ifMatch,
+        params (Guid ProductId, bool IsSelected)[] selections)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Put, "/api/cart/selection")
+        {
+            Content = JsonContent.Create(new
+            {
+                items = selections.Select(selection => new
+                {
+                    productId = selection.ProductId,
+                    isSelected = selection.IsSelected
+                })
+            })
+        };
+        request.Headers.Add("X-Test-User", Alice);
+        request.Headers.Add("If-Match", ifMatch);
+        var response = await _client.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+        return response.Headers.ETag!.Tag;
     }
 
     private static HttpRequestMessage CreateCheckoutRequest(string idempotencyKey, string ifMatch)
@@ -336,6 +430,33 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         return await context.CartItems.AsNoTracking().CountAsync(item => item.CartId == cartId);
     }
 
+    private async Task<List<CartItemSnapshot>> GetAliceCartItemsAsync()
+    {
+        await using var context = CreateContext();
+
+        var aliceId = await context.Users
+            .Where(user => user.Email == SeedData.AliceEmail)
+            .Select(user => user.Id)
+            .FirstAsync();
+
+        var cartId = await context.Carts
+            .Where(cart => cart.UserId == aliceId)
+            .Select(cart => (Guid?)cart.Id)
+            .FirstOrDefaultAsync();
+
+        if (cartId is null)
+        {
+            return new List<CartItemSnapshot>();
+        }
+
+        return await context.CartItems
+            .AsNoTracking()
+            .Where(item => item.CartId == cartId)
+            .OrderBy(item => item.ProductId)
+            .Select(item => new CartItemSnapshot(item.ProductId, item.Quantity, item.IsSelected))
+            .ToListAsync();
+    }
+
     private static byte[] ComputeFingerprint(string ifMatch)
     {
         var input = $"POST /api/orders\n{ifMatch}";
@@ -368,6 +489,8 @@ public class CheckoutRecoveryTests : IAsyncLifetime
     }
 
     private sealed record ErrorResponse(string Code);
+
+    private sealed record CartItemSnapshot(Guid ProductId, int Quantity, bool IsSelected);
 
     private sealed record StockSnapshot(int Available, int Reserved);
 }

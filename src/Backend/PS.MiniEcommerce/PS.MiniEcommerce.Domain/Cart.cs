@@ -104,6 +104,17 @@ public class Cart
         UpdatedAtUtc = utcNow;
     }
 
+    public void RemoveSelected(DateTime utcNow)
+    {
+        var removed = _items.RemoveAll(item => item.IsSelected);
+        if (removed == 0)
+        {
+            return;
+        }
+
+        UpdatedAtUtc = utcNow;
+    }
+
     public void Clear(DateTime utcNow)
     {
         _items.Clear();

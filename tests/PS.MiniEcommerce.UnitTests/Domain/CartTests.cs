@@ -252,6 +252,50 @@ public class CartTests
     }
 
     [Fact]
+    public void RemoveSelected_WithMixedSelection_RemovesOnlySelectedAndUpdatesTimestamp()
+    {
+        var cart = Cart.Create(UserId, FixedUtcNow);
+        cart.AddItem(ProductA, 1, FixedUtcNow);
+        cart.AddItem(ProductB, 2, FixedUtcNow);
+        cart.AddItem(ProductC, 3, FixedUtcNow);
+        cart.Items.Single(item => item.ProductId == ProductB).SetSelected(false);
+
+        cart.RemoveSelected(LaterUtcNow);
+
+        var remaining = Assert.Single(cart.Items);
+        Assert.Equal(ProductB, remaining.ProductId);
+        Assert.Equal(2, remaining.Quantity);
+        Assert.False(remaining.IsSelected);
+        Assert.Equal(LaterUtcNow, cart.UpdatedAtUtc);
+    }
+
+    [Fact]
+    public void RemoveSelected_WithNoSelectedItems_DoesNotChangeItemsOrTimestamp()
+    {
+        var cart = Cart.Create(UserId, FixedUtcNow);
+        cart.AddItem(ProductA, 1, FixedUtcNow);
+        cart.Items.Single().SetSelected(false);
+
+        cart.RemoveSelected(LaterUtcNow);
+
+        var remaining = Assert.Single(cart.Items);
+        Assert.Equal(ProductA, remaining.ProductId);
+        Assert.False(remaining.IsSelected);
+        Assert.Equal(FixedUtcNow, cart.UpdatedAtUtc);
+    }
+
+    [Fact]
+    public void RemoveSelected_OnEmptyCart_DoesNotChangeTimestamp()
+    {
+        var cart = Cart.Create(UserId, FixedUtcNow);
+
+        cart.RemoveSelected(LaterUtcNow);
+
+        Assert.Empty(cart.Items);
+        Assert.Equal(FixedUtcNow, cart.UpdatedAtUtc);
+    }
+
+    [Fact]
     public void Clear_WithItems_EmptiesItemsAndUpdatesTimestamp()
     {
         var cart = Cart.Create(UserId, FixedUtcNow);
