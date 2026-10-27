@@ -31,8 +31,28 @@ public class AddCartItemHandlerTests
         var item = Assert.Single(result.Cart.Items);
         Assert.Equal(product.Id, item.ProductId);
         Assert.Equal(2, item.Quantity);
+        Assert.True(item.IsSelected);
         Assert.Equal(20m, result.Cart.TotalAmount);
+        Assert.Equal(20m, result.Cart.SelectedTotalAmount);
         Assert.Equal(Convert.ToBase64String(RowVersion), result.Version);
+    }
+
+    [Fact]
+    public async Task Handle_WhenExistingItemDeselected_DoesNotResetSelection()
+    {
+        var cart = Cart.Create(UserId, FixedUtcNow);
+        var product = Product.Create("Wireless Mouse", "Description.", Money.FromDecimal(10m), 10, FixedUtcNow);
+        cart.AddItem(product.Id, 1, FixedUtcNow);
+        Assert.Single(cart.Items).SetSelected(false);
+        var handler = CreateHandler(cart, product);
+
+        var result = await handler.Handle(
+            new AddCartItemCommand(product.Id, 2, ValidIfMatch),
+            CancellationToken.None);
+
+        var item = Assert.Single(result.Cart.Items);
+        Assert.False(item.IsSelected);
+        Assert.Equal(0m, result.Cart.SelectedTotalAmount);
     }
 
     [Fact]

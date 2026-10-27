@@ -11,6 +11,7 @@ public static class CartDtoBuilder
 
         var itemDtos = new List<CartItemDto>(cart.Items.Count);
         var totalAmount = Money.Zero;
+        var selectedTotalAmount = Money.Zero;
 
         foreach (var item in cart.Items)
         {
@@ -23,11 +24,17 @@ public static class CartDtoBuilder
                 product.Price.Amount,
                 item.Quantity,
                 lineTotal.Amount,
+                item.IsSelected,
                 product.IsActive));
 
             totalAmount += lineTotal;
+
+            if (item.IsSelected)
+            {
+                selectedTotalAmount += lineTotal;
+            }
         }
 
-        return new CartDto(itemDtos, totalAmount.Amount);
+        return new CartDto(itemDtos, totalAmount.Amount, selectedTotalAmount.Amount);
     }
 }

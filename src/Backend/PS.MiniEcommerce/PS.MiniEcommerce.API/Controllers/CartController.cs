@@ -60,6 +60,25 @@ public class CartController : ControllerBase
         return Ok(result.Cart);
     }
 
+    [HttpPut("selection")]
+    public async Task<IActionResult> UpdateSelection(
+        [FromBody] UpdateCartSelectionRequest request,
+        [FromHeader(Name = "If-Match")] string? ifMatch,
+        CancellationToken cancellationToken = default)
+    {
+        var items = request.Items
+            .Select(item => new CartItemSelectionDto(item.ProductId, item.IsSelected))
+            .ToList();
+
+        var result = await _mediator.Send(
+            new UpdateCartSelectionCommand(items, ifMatch),
+            cancellationToken);
+
+        Response.Headers.ETag = $"\"{result.Version}\"";
+
+        return Ok(result.Cart);
+    }
+
     [HttpDelete("items/{productId:guid}")]
     public async Task<IActionResult> RemoveItem(
         Guid productId,

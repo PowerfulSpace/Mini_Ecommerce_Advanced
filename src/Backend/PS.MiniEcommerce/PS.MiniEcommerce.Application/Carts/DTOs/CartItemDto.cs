@@ -6,4 +6,5 @@ public sealed record CartItemDto(
     decimal UnitPrice,
     int Quantity,
     decimal LineTotal,
+    bool IsSelected,
     bool IsAvailable);

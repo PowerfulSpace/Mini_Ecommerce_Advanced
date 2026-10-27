@@ -214,6 +214,114 @@ public class CartMutationEndpointTests : IAsyncLifetime
         Assert.Equal("cart_item_not_found", error.Code);
     }
 
+    [Fact]
+    public async Task PutSelection_WithoutIfMatch_Returns428()
+    {
+        await EnsureCartExistsAsync();
+        var productId = await GetProductIdByNameAsync("Wireless Mouse");
+
+        var response = await PutSelectionAsync(
+            new object[] { new { productId, isSelected = false } },
+            ifMatch: null);
+
+        Assert.Equal(HttpStatusCode.PreconditionRequired, response.StatusCode);
+
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("precondition_required", error.Code);
+    }
+
+    [Fact]
+    public async Task PutSelection_WithValidIfMatch_UpdatesSelectionAndTotals()
+    {
+        var etag = await EnsureCartExistsAsync();
+        var mouseId = await GetProductIdByNameAsync("Wireless Mouse");
+        var keyboardId = await GetProductIdByNameAsync("Ergonomic Keyboard");
+
+        var addMouse = await PostItemAsync(mouseId, 2, etag);
+        Assert.Equal(HttpStatusCode.OK, addMouse.StatusCode);
+        var addKeyboard = await PostItemAsync(keyboardId, 1, addMouse.Headers.ETag!.ToString());
+        Assert.Equal(HttpStatusCode.OK, addKeyboard.StatusCode);
+
+        var oldETag = addKeyboard.Headers.ETag!.ToString();
+        var response = await PutSelectionAsync(
+            new object[] { new { productId = mouseId, isSelected = false } },
+            oldETag);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var newETag = response.Headers.ETag!.ToString();
+        Assert.NotEqual(oldETag, newETag);
+
+        var cart = await response.Content.ReadFromJsonAsync<CartResponse>();
+        Assert.NotNull(cart);
+        Assert.Equal(49.48m, cart.TotalAmount);
+        Assert.Equal(9.50m, cart.SelectedTotalAmount);
+
+        var mouse = cart.Items.Single(item => item.ProductId == mouseId);
+        var keyboard = cart.Items.Single(item => item.ProductId == keyboardId);
+        Assert.False(mouse.IsSelected);
+        Assert.True(keyboard.IsSelected);
+
+        var getResponse = await _client.SendAsync(
+            CreateAuthenticatedRequest(HttpMethod.Get, "/api/cart"));
+        getResponse.EnsureSuccessStatusCode();
+        var fetchedCart = await getResponse.Content.ReadFromJsonAsync<CartResponse>();
+        Assert.NotNull(fetchedCart);
+        Assert.Equal(newETag, getResponse.Headers.ETag!.ToString());
+        Assert.Equal(9.50m, fetchedCart.SelectedTotalAmount);
+        Assert.False(fetchedCart.Items.Single(item => item.ProductId == mouseId).IsSelected);
+    }
+
+    [Fact]
+    public async Task PutSelection_WithStaleETag_Returns412()
+    {
+        var firstETag = await EnsureCartExistsAsync();
+        var productId = await GetProductIdByNameAsync("Wireless Mouse");
+        var add = await PostItemAsync(productId, 1, firstETag);
+        Assert.Equal(HttpStatusCode.OK, add.StatusCode);
+
+        var response = await PutSelectionAsync(
+            new object[] { new { productId, isSelected = false } },
+            firstETag);
+
+        Assert.Equal(HttpStatusCode.PreconditionFailed, response.StatusCode);
+
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("cart_version_conflict", error.Code);
+    }
+
+    [Fact]
+    public async Task PutSelection_WithEmptyItems_Returns400()
+    {
+        var etag = await EnsureCartExistsAsync();
+
+        var response = await PutSelectionAsync(Array.Empty<object>(), etag);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("validation_error", error.Code);
+    }
+
+    [Fact]
+    public async Task PutSelection_WithUnknownProduct_Returns404CartItemNotFound()
+    {
+        var etag = await EnsureCartExistsAsync();
+
+        var response = await PutSelectionAsync(
+            new object[] { new { productId = Guid.NewGuid(), isSelected = false } },
+            etag);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("cart_item_not_found", error.Code);
+    }
+
     private async Task<string> EnsureCartExistsAsync()
     {
         var response = await _client.SendAsync(CreateAuthenticatedRequest(HttpMethod.Get, "/api/cart"));
@@ -253,6 +361,13 @@ public class CartMutationEndpointTests : IAsyncLifetime
         return _client.SendAsync(request);
     }
 
+    private Task<HttpResponseMessage> PutSelectionAsync(object[] items, string? ifMatch)
+    {
+        var request = CreateAuthenticatedRequest(HttpMethod.Put, "/api/cart/selection", ifMatch);
+        request.Content = JsonContent.Create(new { items });
+        return _client.SendAsync(request);
+    }
+
     private async Task<Guid> GetProductIdByNameAsync(string name)
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
@@ -279,7 +394,10 @@ public class CartMutationEndpointTests : IAsyncLifetime
             .FirstAsync();
     }
 
-    private sealed record CartResponse(List<CartItemResponse> Items, decimal TotalAmount);
+    private sealed record CartResponse(
+        List<CartItemResponse> Items,
+        decimal TotalAmount,
+        decimal SelectedTotalAmount);
 
     private sealed record CartItemResponse(
         Guid ProductId,
@@ -287,6 +405,7 @@ public class CartMutationEndpointTests : IAsyncLifetime
         decimal UnitPrice,
         int Quantity,
         decimal LineTotal,
+        bool IsSelected,
         bool IsAvailable);
 
     private sealed record ErrorResponse(string Code);

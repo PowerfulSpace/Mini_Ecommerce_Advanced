@@ -52,6 +52,29 @@ public class CartTests
     }
 
     [Fact]
+    public void AddItem_WithNewProduct_SelectsItemByDefault()
+    {
+        var cart = Cart.Create(UserId, FixedUtcNow);
+
+        cart.AddItem(ProductA, 1, FixedUtcNow);
+
+        Assert.True(Assert.Single(cart.Items).IsSelected);
+    }
+
+    [Fact]
+    public void AddItem_WithExistingDeselectedProduct_KeepsSelection()
+    {
+        var cart = Cart.Create(UserId, FixedUtcNow);
+        cart.AddItem(ProductA, 1, FixedUtcNow);
+        var item = Assert.Single(cart.Items);
+        item.SetSelected(false);
+
+        cart.AddItem(ProductA, 2, LaterUtcNow);
+
+        Assert.False(item.IsSelected);
+    }
+
+    [Fact]
     public void AddItem_WithZeroQuantity_ThrowsDomainValidationException()
     {
         var cart = Cart.Create(UserId, FixedUtcNow);
@@ -107,6 +130,63 @@ public class CartTests
         Assert.Equal(7, item.Quantity);
         Assert.Equal(LaterUtcNow, item.UpdatedAtUtc);
         Assert.Equal(LaterUtcNow, cart.UpdatedAtUtc);
+    }
+
+    [Fact]
+    public void UpdateItemQuantity_WithDeselectedItem_KeepsSelection()
+    {
+        var cart = Cart.Create(UserId, FixedUtcNow);
+        cart.AddItem(ProductA, 2, FixedUtcNow);
+        var item = Assert.Single(cart.Items);
+        item.SetSelected(false);
+
+        cart.UpdateItemQuantity(ProductA, 7, LaterUtcNow);
+
+        Assert.False(item.IsSelected);
+    }
+
+    [Fact]
+    public void SetSelection_WithExistingItems_UpdatesSelectionAndTimestamp()
+    {
+        var cart = Cart.Create(UserId, FixedUtcNow);
+        cart.AddItem(ProductA, 1, FixedUtcNow);
+        cart.AddItem(ProductB, 2, FixedUtcNow);
+
+        cart.SetSelection(
+            new Dictionary<Guid, bool>
+            {
+                [ProductA] = false,
+                [ProductB] = true
+            },
+            LaterUtcNow);
+
+        Assert.False(cart.Items.Single(item => item.ProductId == ProductA).IsSelected);
+        Assert.True(cart.Items.Single(item => item.ProductId == ProductB).IsSelected);
+        Assert.Equal(LaterUtcNow, cart.UpdatedAtUtc);
+    }
+
+    [Fact]
+    public void SetSelection_WithMissingProduct_ThrowsConflictWithCartItemNotFound()
+    {
+        var cart = Cart.Create(UserId, FixedUtcNow);
+        cart.AddItem(ProductA, 1, FixedUtcNow);
+
+        var exception = Assert.Throws<DomainConflictException>(
+            () => cart.SetSelection(
+                new Dictionary<Guid, bool> { [ProductB] = false },
+                LaterUtcNow));
+
+        Assert.Equal("cart_item_not_found", exception.Code);
+    }
+
+    [Fact]
+    public void SetSelection_WithEmptySelections_DoesNotUpdateTimestamp()
+    {
+        var cart = Cart.Create(UserId, FixedUtcNow);
+
+        cart.SetSelection(new Dictionary<Guid, bool>(), LaterUtcNow);
+
+        Assert.Equal(FixedUtcNow, cart.UpdatedAtUtc);
     }
 
     [Fact]

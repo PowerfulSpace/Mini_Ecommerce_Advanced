@@ -78,6 +78,32 @@ public class Cart
         UpdatedAtUtc = utcNow;
     }
 
+    public void SetSelection(IReadOnlyDictionary<Guid, bool> selections, DateTime utcNow)
+    {
+        if (selections.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var productId in selections.Keys)
+        {
+            if (!_items.Any(item => item.ProductId == productId))
+            {
+                throw new DomainConflictException(
+                    "Cart item not found.",
+                    "cart_item_not_found");
+            }
+        }
+
+        foreach (var selection in selections)
+        {
+            var item = _items.First(item => item.ProductId == selection.Key);
+            item.SetSelected(selection.Value);
+        }
+
+        UpdatedAtUtc = utcNow;
+    }
+
     public void Clear(DateTime utcNow)
     {
         _items.Clear();

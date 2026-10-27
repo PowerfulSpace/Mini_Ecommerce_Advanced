@@ -27,6 +27,10 @@ public class CartItemConfiguration : IEntityTypeConfiguration<CartItem>
         builder.Property(cartItem => cartItem.Quantity)
             .IsRequired();
 
+        builder.Property(cartItem => cartItem.IsSelected)
+            .IsRequired()
+            .HasDefaultValue(true);
+
         builder.Property(cartItem => cartItem.CreatedAtUtc)
             .IsRequired();
 

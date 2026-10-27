@@ -10,6 +10,8 @@ public class CartItem
 
     public int Quantity { get; private set; }
 
+    public bool IsSelected { get; private set; }
+
     public DateTime CreatedAtUtc { get; private set; }
 
     public DateTime UpdatedAtUtc { get; private set; }
@@ -24,6 +26,7 @@ public class CartItem
         CartId = cartId;
         ProductId = productId;
         Quantity = quantity;
+        IsSelected = true;
         CreatedAtUtc = utcNow;
         UpdatedAtUtc = utcNow;
     }
@@ -38,5 +41,10 @@ public class CartItem
     {
         Quantity = quantity;
         UpdatedAtUtc = utcNow;
+    }
+
+    public void SetSelected(bool isSelected)
+    {
+        IsSelected = isSelected;
     }
 }
