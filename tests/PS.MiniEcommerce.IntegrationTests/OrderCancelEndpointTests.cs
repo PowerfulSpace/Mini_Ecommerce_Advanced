@@ -1,11 +1,14 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Payments;
 using PS.MiniEcommerce.Infrastructure;
+using PS.MiniEcommerce.Infrastructure.Persistence;
+using PS.MiniEcommerce.Infrastructure.Seed;
 using PS.MiniEcommerce.IntegrationTests.Fixtures;
 
 namespace PS.MiniEcommerce.IntegrationTests;
@@ -286,6 +289,26 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         Assert.Equal(stockAfterCheckout.Available + 2, stockAfterCancel.Available);
         Assert.Equal(stockAfterCheckout.Reserved, stockAfterCancel.Reserved);
 
+        var payment = await GetPaymentByOrderIdAsync(orderId);
+        Assert.NotNull(payment);
+        Assert.Equal(PaymentStatus.Refunded, payment.Status);
+        Assert.Equal(payment.Amount.Amount, payment.RefundedAmount.Amount);
+        Assert.NotNull(payment.RefundedAtUtc);
+        Assert.Single(payment.Refunds);
+
+        var paymentRefunded = Assert.Single(_capture.Events.OfType<PaymentRefunded>());
+        Assert.Equal(payment.Id, paymentRefunded.PaymentId);
+        Assert.Equal(payment.Amount.Amount, paymentRefunded.Amount.Amount);
+        Assert.Null(paymentRefunded.Reason);
+
+        var audit = await GetAuditLogAsync("PaymentRefunded");
+        Assert.Equal("Payment", audit.EntityType);
+        Assert.Equal(payment.Id, audit.EntityId);
+        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), audit.ActorUserId);
+        using var payload = JsonDocument.Parse(audit.Payload!);
+        Assert.Equal(orderId, payload.RootElement.GetProperty("orderId").GetGuid());
+        Assert.Equal(payment.Amount.Amount, payload.RootElement.GetProperty("amount").GetDecimal());
+
         var orderCancelled = Assert.Single(_capture.Events.OfType<OrderCancelled>());
         Assert.Equal(orderId, orderCancelled.OrderId);
         Assert.True(orderCancelled.IsFullCancellation);
@@ -320,11 +343,59 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         var updated = await response.Content.ReadFromJsonAsync<OrderDetailResponse>();
         Assert.NotNull(updated);
         Assert.Equal("Paid", updated.Status);
-        Assert.Equal(1, Assert.Single(updated.Items).CancelledQuantity);
+        var updatedItem = Assert.Single(updated.Items);
+        Assert.Equal(1, updatedItem.CancelledQuantity);
 
         var stockAfterCancel = await GetStockAsync(WirelessMouse);
         Assert.Equal(stockAfterCheckout.Available + 1, stockAfterCancel.Available);
         Assert.Equal(stockAfterCheckout.Reserved, stockAfterCancel.Reserved);
+
+        var expectedRefund = updatedItem.UnitPrice * updatedItem.CancelledQuantity;
+        var payment = await GetPaymentByOrderIdAsync(orderId);
+        Assert.NotNull(payment);
+        Assert.Equal(PaymentStatus.Confirmed, payment.Status);
+        Assert.Equal(expectedRefund, payment.RefundedAmount.Amount);
+        Assert.Null(payment.RefundedAtUtc);
+        Assert.Equal(expectedRefund, Assert.Single(payment.Refunds).Amount.Amount);
+
+        var paymentRefunded = Assert.Single(_capture.Events.OfType<PaymentRefunded>());
+        Assert.Equal(expectedRefund, paymentRefunded.Amount.Amount);
+    }
+
+    [Fact]
+    public async Task CancelOrder_WhenRefundFails_RollsBackOrderAndStock()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
+        var stockBefore = await GetStockAsync(WirelessMouse);
+        await SetStatusAsync(orderId, OrderStatus.Paid);
+
+        await using (var context = CreateContext())
+        {
+            var paymentId = await context.Orders
+                .Where(order => order.Id == orderId)
+                .Select(order => order.PaymentId)
+                .FirstAsync();
+
+            await context.Database.ExecuteSqlInterpolatedAsync(
+                $"UPDATE Payments SET Status = 'Pending' WHERE Id = {paymentId!.Value}");
+        }
+
+        var response = await CancelAsync(Alice, orderId);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("refund_not_allowed", error.Code);
+
+        Assert.Equal(OrderStatus.Paid, await GetOrderStatusAsync(orderId));
+        var stockAfter = await GetStockAsync(WirelessMouse);
+        Assert.Equal(stockBefore.Available, stockAfter.Available);
+        Assert.Equal(stockBefore.Reserved, stockAfter.Reserved);
+
+        var payment = await GetPaymentByOrderIdAsync(orderId);
+        Assert.NotNull(payment);
+        Assert.Equal(0m, payment.RefundedAmount.Amount);
+        Assert.Empty(payment.Refunds);
     }
 
     [Fact]
@@ -679,6 +750,32 @@ public class OrderCancelEndpointTests : IAsyncLifetime
             .FirstAsync();
     }
 
+    private async Task<Payment?> GetPaymentByOrderIdAsync(Guid orderId)
+    {
+        await using var context = CreateContext();
+        return await context.Payments
+            .AsNoTracking()
+            .Include(payment => payment.Refunds)
+            .FirstOrDefaultAsync(payment => payment.OrderId == orderId);
+    }
+
+    private async Task<Guid> GetUserIdAsync(string email)
+    {
+        await using var context = CreateContext();
+        return await context.Users
+            .Where(user => user.Email == email)
+            .Select(user => user.Id)
+            .FirstAsync();
+    }
+
+    private async Task<AuditLog> GetAuditLogAsync(string action)
+    {
+        await using var context = CreateContext();
+        return await context.AuditLogs
+            .AsNoTracking()
+            .SingleAsync(log => log.Action == action);
+    }
+
     private async Task<Guid?> SetStatusAsync(Guid orderId, OrderStatus status)
     {
         await using var context = CreateContext();
@@ -697,6 +794,18 @@ public class OrderCancelEndpointTests : IAsyncLifetime
             context.Payments.Add(payment);
             await context.SaveChangesAsync();
             storedPaymentId = payment.Id;
+        }
+
+        if (status is OrderStatus.Paid or OrderStatus.Shipped or OrderStatus.Delivered)
+        {
+            var payment = await context.Payments
+                .FirstAsync(payment => payment.Id == storedPaymentId!.Value);
+
+            if (payment.Status == PaymentStatus.Pending)
+            {
+                payment.MarkConfirmed(DateTime.UtcNow);
+                await context.SaveChangesAsync();
+            }
         }
 
         var affected = await context.Orders

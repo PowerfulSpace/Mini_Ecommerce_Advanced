@@ -85,7 +85,8 @@ if (!app.Environment.IsDevelopment())
 {
     app.Use(async (context, next) =>
     {
-        if (context.Request.Path.StartsWithSegments("/api/admin"))
+        if (context.Request.Path.StartsWithSegments("/api/admin")
+            || IsDevelopmentOnlyPaymentPath(context.Request.Path))
         {
             context.Response.StatusCode = StatusCodes.Status404NotFound;
             return;
@@ -133,6 +134,12 @@ app.MapHealthChecks("/health", new HealthCheckOptions
 });
 
 app.Run();
+
+static bool IsDevelopmentOnlyPaymentPath(PathString path)
+{
+    return path.StartsWithSegments("/api/payments")
+        && path.Value?.EndsWith("/refund", StringComparison.OrdinalIgnoreCase) == true;
+}
 
 static async Task WriteHealthResponse(HttpContext context, HealthReport report)
 {

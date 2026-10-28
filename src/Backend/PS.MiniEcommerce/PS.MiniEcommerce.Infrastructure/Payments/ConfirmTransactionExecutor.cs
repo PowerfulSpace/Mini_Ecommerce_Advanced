@@ -21,17 +21,20 @@ public class ConfirmTransactionExecutor : IConfirmTransactionExecutor
 
     private readonly AppDbContext _dbContext;
     private readonly IOrderRepository _orderRepository;
+    private readonly IPaymentRepository _paymentRepository;
     private readonly IPaymentProvider _paymentProvider;
     private readonly ConfirmAttemptContext _confirmAttemptContext;
 
     public ConfirmTransactionExecutor(
         AppDbContext dbContext,
         IOrderRepository orderRepository,
+        IPaymentRepository paymentRepository,
         IPaymentProvider paymentProvider,
         ConfirmAttemptContext confirmAttemptContext)
     {
         _dbContext = dbContext;
         _orderRepository = orderRepository;
+        _paymentRepository = paymentRepository;
         _paymentProvider = paymentProvider;
         _confirmAttemptContext = confirmAttemptContext;
     }
@@ -56,20 +59,25 @@ public class ConfirmTransactionExecutor : IConfirmTransactionExecutor
 
         try
         {
-            payment = await _dbContext.Payments
-                .FromSqlInterpolated($"SELECT * FROM Payments WITH (UPDLOCK) WHERE Id = {paymentId}")
-                .FirstOrDefaultAsync(cancellationToken);
+            var orderId = await _paymentRepository.GetOrderIdAsync(paymentId, cancellationToken);
 
-            if (payment is null)
+            if (orderId is null)
             {
                 throw new NotFoundException("Payment not found.", "payment_not_found");
             }
 
             order = await _dbContext.Orders
-                .FromSqlInterpolated($"SELECT * FROM Orders WITH (UPDLOCK) WHERE Id = {payment.OrderId}")
+                .FromSqlInterpolated($"SELECT * FROM Orders WITH (UPDLOCK) WHERE Id = {orderId.Value}")
                 .FirstOrDefaultAsync(cancellationToken);
 
-            if (order is null || order.UserId != userId)
+            if (order is null)
+            {
+                throw new NotFoundException("Payment not found.", "payment_not_found");
+            }
+
+            payment = await _paymentRepository.GetByIdAsync(paymentId, cancellationToken);
+
+            if (payment is null || payment.OrderId != order.Id || order.UserId != userId)
             {
                 throw new NotFoundException("Payment not found.", "payment_not_found");
             }

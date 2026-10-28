@@ -2,8 +2,11 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Orders;
+using PS.MiniEcommerce.Application.Payments;
 using PS.MiniEcommerce.Domain;
+using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Exceptions;
+using PS.MiniEcommerce.Domain.Payments;
 
 namespace PS.MiniEcommerce.Infrastructure.Persistence;
 
@@ -17,10 +20,17 @@ public class OrderRepository : IOrderRepository
     }
 
     private readonly AppDbContext _dbContext;
+    private readonly IPaymentRepository _paymentRepository;
+    private readonly IPaymentRefundService _paymentRefundService;
 
-    public OrderRepository(AppDbContext dbContext)
+    public OrderRepository(
+        AppDbContext dbContext,
+        IPaymentRepository paymentRepository,
+        IPaymentRefundService paymentRefundService)
     {
         _dbContext = dbContext;
+        _paymentRepository = paymentRepository;
+        _paymentRefundService = paymentRefundService;
     }
 
     public async Task<(IReadOnlyList<Order> Items, int TotalCount)> GetPagedByUserIdAsync(
@@ -117,6 +127,11 @@ public class OrderRepository : IOrderRepository
 
         var utcNow = DateTime.UtcNow;
         var stockQuantities = new Dictionary<Guid, int>();
+        PaymentRefunded? paymentRefunded = null;
+
+        var payment = currentStatus == OrderStatus.Paid
+            ? await GetPaymentForRefundAsync(order.PaymentId, cancellationToken)
+            : null;
 
         if (items is null)
         {
@@ -149,11 +164,42 @@ public class OrderRepository : IOrderRepository
             order.CancelItems(items, utcNow);
         }
 
+        if (payment is not null)
+        {
+            var refundAmount = order.Status == OrderStatus.Cancelled
+                ? payment.Amount - payment.RefundedAmount
+                : CalculatePartialRefundAmount(order, items!);
+
+            if (refundAmount.Amount > 0)
+            {
+                try
+                {
+                    await _paymentRefundService.RefundAsync(
+                        payment,
+                        refundAmount,
+                        reason: null,
+                        utcNow,
+                        cancellationToken);
+
+                    paymentRefunded = new PaymentRefunded(
+                        payment.Id,
+                        payment.OrderId,
+                        refundAmount,
+                        utcNow);
+                }
+                catch
+                {
+                    await transaction.RollbackAsync(cancellationToken);
+                    _dbContext.ChangeTracker.Clear();
+                    throw;
+                }
+            }
+        }
+
         var stockAction = currentStatus == OrderStatus.Created
             ? CancellationStockAction.ReleaseReservation
             : CancellationStockAction.RestoreAvailable;
 
-        // Paid -> Cancelled does not trigger a refund here; stage 19 (ADR-008) will connect refunds.
         if (stockQuantities.Count > 0
             && !await TryAdjustStockForCancellationAsync(stockQuantities, stockAction, cancellationToken))
         {
@@ -176,6 +222,11 @@ public class OrderRepository : IOrderRepository
         await transaction.CommitAsync(cancellationToken);
 
         var domainEvents = order.DomainEvents.ToList();
+        if (paymentRefunded is not null)
+        {
+            domainEvents.Add(paymentRefunded);
+        }
+
         order.ClearDomainEvents();
 
         _dbContext.ChangeTracker.Clear();
@@ -232,6 +283,36 @@ public class OrderRepository : IOrderRepository
             return (OrderTransitionResult.InvalidTransition, null, currentStatus, null, Array.Empty<object>());
         }
 
+        PaymentRefunded? paymentRefunded = null;
+
+        try
+        {
+            var payment = await GetPaymentForRefundAsync(order.PaymentId, cancellationToken);
+            var refundAmount = payment.Amount - payment.RefundedAmount;
+
+            if (refundAmount.Amount > 0)
+            {
+                await _paymentRefundService.RefundAsync(
+                    payment,
+                    refundAmount,
+                    reason: null,
+                    utcNow,
+                    cancellationToken);
+
+                paymentRefunded = new PaymentRefunded(
+                    payment.Id,
+                    payment.OrderId,
+                    refundAmount,
+                    utcNow);
+            }
+        }
+        catch
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            _dbContext.ChangeTracker.Clear();
+            throw;
+        }
+
         if (!await TryRestoreAvailableForReturnAsync(order, cancellationToken))
         {
             await transaction.RollbackAsync(cancellationToken);
@@ -249,6 +330,11 @@ public class OrderRepository : IOrderRepository
         await transaction.CommitAsync(cancellationToken);
 
         var domainEvents = order.DomainEvents.ToList();
+        if (paymentRefunded is not null)
+        {
+            domainEvents.Add(paymentRefunded);
+        }
+
         order.ClearDomainEvents();
 
         _dbContext.ChangeTracker.Clear();
@@ -454,6 +540,44 @@ public class OrderRepository : IOrderRepository
         }
 
         return true;
+    }
+
+    private async Task<Payment> GetPaymentForRefundAsync(
+        Guid? paymentId,
+        CancellationToken cancellationToken)
+    {
+        if (paymentId is null)
+        {
+            throw new DomainConflictException(
+                "A payment is required to refund the order.",
+                "refund_not_allowed");
+        }
+
+        var payment = await _paymentRepository.GetByIdAsync(paymentId.Value, cancellationToken);
+
+        if (payment is null)
+        {
+            throw new DomainConflictException(
+                "A payment is required to refund the order.",
+                "refund_not_allowed");
+        }
+
+        return payment;
+    }
+
+    private static Money CalculatePartialRefundAmount(
+        Order order,
+        IReadOnlyList<(Guid OrderItemId, int Quantity)> items)
+    {
+        var amount = Money.Zero;
+
+        foreach (var cancellation in items)
+        {
+            var orderItem = order.Items.First(item => item.Id == cancellation.OrderItemId);
+            amount += orderItem.UnitPrice * cancellation.Quantity;
+        }
+
+        return amount;
     }
 
     private static void AddStockQuantity(

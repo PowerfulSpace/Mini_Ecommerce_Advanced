@@ -33,6 +33,14 @@ public interface IPaymentAttemptRepository
         TimeSpan newLeaseDuration,
         CancellationToken cancellationToken);
 
+    Task CompleteAsync(
+        Guid attemptId,
+        Guid paymentId,
+        int statusCode,
+        string responsePayload,
+        DateTime utcNow,
+        CancellationToken cancellationToken);
+
     Task CompleteWithErrorAsync(
         Guid attemptId,
         int statusCode,

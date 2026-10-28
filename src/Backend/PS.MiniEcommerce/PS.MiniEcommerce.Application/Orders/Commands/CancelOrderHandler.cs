@@ -40,7 +40,7 @@ public class CancelOrderHandler : IRequestHandler<CancelOrderCommand, CancelOrde
 
         // Created -> Cancelled releases Reserved back to Available.
         // Paid -> Cancelled restores Available only; Reserved is unchanged.
-        // Refund for Paid -> Cancelled will be connected in stage 19 (ADR-008).
+        // Paid -> Cancelled also refunds the remaining payment amount (ADR-008).
         var (result, order, currentStatus, newRowVersion, domainEvents) = await _orderRepository.CancelAsync(
             request.OrderId,
             userId,

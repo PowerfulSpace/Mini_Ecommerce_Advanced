@@ -161,6 +161,30 @@ public class PaymentTests
     }
 
     [Theory]
+    [InlineData(PaymentStatus.Pending)]
+    [InlineData(PaymentStatus.Failed)]
+    [InlineData(PaymentStatus.Refunded)]
+    public void AddRefund_WhenPaymentIsNotConfirmed_ThrowsRefundNotAllowed(PaymentStatus status)
+    {
+        var payment = Payment.Create(OrderId, Money.FromDecimal(100m), FixedUtcNow);
+
+        if (status == PaymentStatus.Failed)
+        {
+            payment.MarkFailed();
+        }
+        else if (status == PaymentStatus.Refunded)
+        {
+            payment.MarkConfirmed(FixedUtcNow);
+            payment.AddRefund(Money.FromDecimal(100m), FixedUtcNow);
+        }
+
+        var exception = Assert.Throws<DomainConflictException>(
+            () => payment.AddRefund(Money.FromDecimal(1m), FixedUtcNow));
+
+        Assert.Equal("refund_not_allowed", exception.Code);
+    }
+
+    [Theory]
     [InlineData(0)]
     [InlineData(-1)]
     public void AddRefund_WithNonPositiveAmount_ThrowsDomainValidationException(int amount)

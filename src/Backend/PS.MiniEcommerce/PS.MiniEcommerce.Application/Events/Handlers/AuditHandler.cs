@@ -61,6 +61,9 @@ public sealed class AuditHandler : INotificationHandler<DomainEventNotification<
             PaymentConfirmed paymentConfirmed => CreatePaymentConfirmedEntry(
                 paymentConfirmed,
                 GetActorUserId()),
+            PaymentRefunded paymentRefunded => CreatePaymentRefundedEntry(
+                paymentRefunded,
+                GetActorUserId()),
             ProductDeactivated productDeactivated => CreateProductDeactivatedEntry(
                 productDeactivated,
                 GetActorUserId()),
@@ -163,6 +166,29 @@ public sealed class AuditHandler : INotificationHandler<DomainEventNotification<
             paymentConfirmed.PaymentId,
             payload,
             paymentConfirmed.OccurredAtUtc,
+            CorrelationId: null);
+    }
+
+    private static AuditLogEntry CreatePaymentRefundedEntry(
+        PaymentRefunded paymentRefunded,
+        Guid? actorUserId)
+    {
+        var payload = JsonSerializer.Serialize(
+            new
+            {
+                orderId = paymentRefunded.OrderId,
+                amount = paymentRefunded.Amount.Amount,
+                reason = paymentRefunded.Reason
+            },
+            JsonOptions);
+
+        return new AuditLogEntry(
+            actorUserId,
+            "PaymentRefunded",
+            "Payment",
+            paymentRefunded.PaymentId,
+            payload,
+            paymentRefunded.OccurredAtUtc,
             CorrelationId: null);
     }
 

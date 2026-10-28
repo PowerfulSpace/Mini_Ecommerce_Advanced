@@ -98,6 +98,13 @@ public class Payment
 
     public void AddRefund(Money amount, DateTime utcNow, string? reason = null)
     {
+        if (Status != PaymentStatus.Confirmed)
+        {
+            throw new DomainConflictException(
+                "Only confirmed payments can be refunded.",
+                "refund_not_allowed");
+        }
+
         if (amount.Amount <= 0)
         {
             throw new DomainValidationException("Refund amount must be positive.");

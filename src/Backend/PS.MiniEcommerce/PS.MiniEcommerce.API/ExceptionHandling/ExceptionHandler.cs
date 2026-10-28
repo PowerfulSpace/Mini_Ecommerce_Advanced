@@ -112,7 +112,7 @@ public class ExceptionHandler : IExceptionHandler
                 StatusCodes.Status503ServiceUnavailable,
                 "https://tools.ietf.org/html/rfc9110#section-15.6.4",
                 "Service unavailable."),
-            "payment_already_confirmed" or "payment_failed" or "idempotency_key_reused" => (
+            "payment_already_confirmed" or "payment_failed" or "idempotency_key_reused" or "refund_not_allowed" => (
                 StatusCodes.Status409Conflict,
                 "https://tools.ietf.org/html/rfc9110#section-15.5.10",
                 "Conflict."),

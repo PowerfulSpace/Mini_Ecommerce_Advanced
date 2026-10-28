@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
@@ -22,6 +23,7 @@ public class PaymentsEndpointTests : IAsyncLifetime
 {
     private const string Alice = "alice";
     private const string Bob = "bob";
+    private const string Admin = "admin";
     private const string WirelessMouse = "Wireless Mouse";
 
     private readonly TestDatabaseFixture _fixture;
@@ -395,6 +397,421 @@ public class PaymentsEndpointTests : IAsyncLifetime
         Assert.Equal(OrderStatus.Paid, await GetOrderStatusAsync(order.OrderId));
     }
 
+    [Fact]
+    public async Task Refund_WhenConfirmedPartial_Returns200AndCreatesRefund()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+        var confirm = await ConfirmAsync(_client, order.PaymentId, "refund-partial-confirm-1");
+        Assert.Equal(HttpStatusCode.OK, confirm.StatusCode);
+
+        const decimal amount = 5m;
+        const string reason = "damaged";
+        var adminUserId = await GetUserIdAsync(SeedData.AdminEmail);
+
+        var response = await RefundAsync(
+            _client,
+            order.PaymentId,
+            amount,
+            reason,
+            "refund-partial-1");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("application/json", response.Content.Headers.ContentType?.MediaType);
+
+        var payment = await response.Content.ReadFromJsonAsync<PaymentResponse>();
+        Assert.NotNull(payment);
+        Assert.Equal(order.PaymentId, payment.Id);
+        Assert.Equal(order.OrderId, payment.OrderId);
+        Assert.Equal(amount, payment.RefundedAmount);
+        Assert.Equal("Confirmed", payment.Status);
+        Assert.Null(payment.RefundedAtUtc);
+
+        var stored = await GetPaymentWithRefundsAsync(order.PaymentId);
+        Assert.NotNull(stored);
+        Assert.Equal(PaymentStatus.Confirmed, stored.Status);
+        Assert.Equal(amount, stored.RefundedAmount.Amount);
+        Assert.Null(stored.RefundedAtUtc);
+        var refund = Assert.Single(stored.Refunds);
+        Assert.Equal(order.PaymentId, refund.PaymentId);
+        Assert.Equal(amount, refund.Amount.Amount);
+        Assert.Equal(reason, refund.Reason);
+
+        var attempt = await GetPaymentAttemptAsync("refund-partial-1");
+        Assert.NotNull(attempt);
+        Assert.Equal(PaymentAttemptStatus.Completed, attempt.Status);
+        Assert.Equal(200, attempt.ResponseStatusCode);
+        Assert.Equal(order.PaymentId, attempt.PaymentId);
+
+        var paymentRefunded = Assert.Single(_capture.Events.OfType<PaymentRefunded>());
+        Assert.Equal(order.PaymentId, paymentRefunded.PaymentId);
+        Assert.Equal(amount, paymentRefunded.Amount.Amount);
+        Assert.Equal(reason, paymentRefunded.Reason);
+
+        var audit = Assert.Single(
+            await GetAuditLogsAsync(),
+            log => log.Action == "PaymentRefunded");
+        Assert.Equal("Payment", audit.EntityType);
+        Assert.Equal(order.PaymentId, audit.EntityId);
+        Assert.Equal(adminUserId, audit.ActorUserId);
+        using var payload = System.Text.Json.JsonDocument.Parse(audit.Payload!);
+        Assert.Equal(order.OrderId, payload.RootElement.GetProperty("orderId").GetGuid());
+        Assert.Equal(amount, payload.RootElement.GetProperty("amount").GetDecimal());
+        Assert.Equal(reason, payload.RootElement.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public async Task Refund_WhenMultiplePartialsReachFull_RefundsOnlyOnFullAmount()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+        await ConfirmAsync(_client, order.PaymentId, "refund-multiple-confirm-1");
+        var payment = await GetPaymentAsync(order.PaymentId);
+        Assert.NotNull(payment);
+
+        const decimal firstAmount = 5m;
+        var secondAmount = payment.Amount.Amount - firstAmount;
+
+        var first = await RefundAsync(
+            _client,
+            order.PaymentId,
+            firstAmount,
+            "first",
+            "refund-multiple-1");
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+
+        var afterFirst = await GetPaymentWithRefundsAsync(order.PaymentId);
+        Assert.NotNull(afterFirst);
+        Assert.Equal(PaymentStatus.Confirmed, afterFirst.Status);
+        Assert.Equal(firstAmount, afterFirst.RefundedAmount.Amount);
+
+        var second = await RefundAsync(
+            _client,
+            order.PaymentId,
+            secondAmount,
+            "second",
+            "refund-multiple-2");
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+
+        var afterSecond = await GetPaymentWithRefundsAsync(order.PaymentId);
+        Assert.NotNull(afterSecond);
+        Assert.Equal(PaymentStatus.Refunded, afterSecond.Status);
+        Assert.Equal(payment.Amount.Amount, afterSecond.RefundedAmount.Amount);
+        Assert.NotNull(afterSecond.RefundedAtUtc);
+        Assert.Equal(2, afterSecond.Refunds.Count);
+        Assert.Equal(2, _capture.Events.OfType<PaymentRefunded>().Count());
+    }
+
+    [Fact]
+    public async Task Refund_WhenPaymentIsPending_Returns409RefundNotAllowed()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+
+        var response = await RefundAsync(
+            _client,
+            order.PaymentId,
+            1m,
+            null,
+            "refund-pending-1");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("refund_not_allowed", error.Code);
+
+        var stored = await GetPaymentWithRefundsAsync(order.PaymentId);
+        Assert.NotNull(stored);
+        Assert.Equal(PaymentStatus.Pending, stored.Status);
+        Assert.Equal(0m, stored.RefundedAmount.Amount);
+        Assert.Empty(stored.Refunds);
+
+        var attempt = await GetPaymentAttemptAsync("refund-pending-1");
+        Assert.NotNull(attempt);
+        Assert.Equal(PaymentAttemptStatus.Completed, attempt.Status);
+        Assert.Equal(409, attempt.ResponseStatusCode);
+    }
+
+    [Fact]
+    public async Task Refund_WhenAmountExceedsRemaining_Returns409RefundNotAllowed()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+        await ConfirmAsync(_client, order.PaymentId, "refund-exceeds-confirm-1");
+        var payment = await GetPaymentAsync(order.PaymentId);
+        Assert.NotNull(payment);
+
+        var response = await RefundAsync(
+            _client,
+            order.PaymentId,
+            payment.Amount.Amount + 0.01m,
+            null,
+            "refund-exceeds-1");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("refund_not_allowed", error.Code);
+
+        var stored = await GetPaymentWithRefundsAsync(order.PaymentId);
+        Assert.NotNull(stored);
+        Assert.Equal(0m, stored.RefundedAmount.Amount);
+        Assert.Empty(stored.Refunds);
+    }
+
+    [Fact]
+    public async Task Refund_WhenPaymentAlreadyRefunded_Returns409RefundNotAllowed()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+        await ConfirmAsync(_client, order.PaymentId, "refund-already-confirm-1");
+        var payment = await GetPaymentAsync(order.PaymentId);
+        Assert.NotNull(payment);
+
+        var first = await RefundAsync(
+            _client,
+            order.PaymentId,
+            payment.Amount.Amount,
+            null,
+            "refund-already-1");
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+
+        var second = await RefundAsync(
+            _client,
+            order.PaymentId,
+            1m,
+            null,
+            "refund-already-2");
+
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        var error = await second.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("refund_not_allowed", error.Code);
+    }
+
+    [Fact]
+    public async Task Refund_WhenSameKeyHasDifferentFingerprint_Returns409IdempotencyKeyReused()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+        await ConfirmAsync(_client, order.PaymentId, "refund-fingerprint-confirm-1");
+        const string idempotencyKey = "refund-fingerprint-1";
+
+        var first = await RefundAsync(
+            _client,
+            order.PaymentId,
+            5m,
+            "damaged",
+            idempotencyKey);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+
+        var second = await RefundAsync(
+            _client,
+            order.PaymentId,
+            6m,
+            "damaged",
+            idempotencyKey);
+
+        Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
+        var error = await second.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("idempotency_key_reused", error.Code);
+
+        var stored = await GetPaymentWithRefundsAsync(order.PaymentId);
+        Assert.NotNull(stored);
+        Assert.Equal(5m, stored.RefundedAmount.Amount);
+        Assert.Single(stored.Refunds);
+    }
+
+    [Fact]
+    public async Task Refund_WhenReplayingSameKey_ReturnsStoredResponseWithoutNewEventsOrAudit()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+        await ConfirmAsync(_client, order.PaymentId, "refund-replay-confirm-1");
+        const string idempotencyKey = "refund-replay-1";
+
+        var first = await RefundAsync(
+            _client,
+            order.PaymentId,
+            5m,
+            "damaged",
+            idempotencyKey);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var firstBody = await first.Content.ReadAsStringAsync();
+
+        var auditsBeforeReplay = await GetAuditLogsAsync();
+        var second = await RefundAsync(
+            _client,
+            order.PaymentId,
+            5m,
+            "damaged",
+            idempotencyKey);
+
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        Assert.Equal(firstBody, await second.Content.ReadAsStringAsync());
+        Assert.Single(await GetPaymentAttemptsByKeyAsync(idempotencyKey));
+        Assert.Single(_capture.Events.OfType<PaymentRefunded>());
+
+        var stored = await GetPaymentWithRefundsAsync(order.PaymentId);
+        Assert.NotNull(stored);
+        Assert.Equal(5m, stored.RefundedAmount.Amount);
+        Assert.Single(stored.Refunds);
+
+        var auditsAfterReplay = await GetAuditLogsAsync();
+        Assert.Equal(
+            auditsBeforeReplay.Count(audit => audit.Action == "PaymentRefunded"),
+            auditsAfterReplay.Count(audit => audit.Action == "PaymentRefunded"));
+    }
+
+    [Fact]
+    public async Task Refund_WhenAttemptIsInProgressWithActiveLease_Returns503()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+        await ConfirmAsync(_client, order.PaymentId, "refund-active-confirm-1");
+        const string idempotencyKey = "refund-active-lease-1";
+        var userId = await GetUserIdAsync(SeedData.AdminEmail);
+
+        await SeedPaymentAttemptAsync(
+            userId,
+            idempotencyKey,
+            ComputeRefundFingerprint(order.PaymentId, 5m, null),
+            DateTime.UtcNow,
+            TimeSpan.FromMinutes(1));
+
+        var response = await RefundAsync(
+            _client,
+            order.PaymentId,
+            5m,
+            null,
+            idempotencyKey);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("idempotency_in_progress", error.Code);
+
+        var attempt = await GetPaymentAttemptAsync(idempotencyKey);
+        Assert.NotNull(attempt);
+        Assert.Equal(PaymentAttemptStatus.InProgress, attempt.Status);
+
+        var stored = await GetPaymentWithRefundsAsync(order.PaymentId);
+        Assert.NotNull(stored);
+        Assert.Equal(0m, stored.RefundedAmount.Amount);
+    }
+
+    [Fact]
+    public async Task Refund_WhenAttemptLeaseIsExpired_ClaimsAndCompletes()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+        await ConfirmAsync(_client, order.PaymentId, "refund-expired-confirm-1");
+        const string idempotencyKey = "refund-expired-lease-1";
+        var userId = await GetUserIdAsync(SeedData.AdminEmail);
+
+        await SeedPaymentAttemptAsync(
+            userId,
+            idempotencyKey,
+            ComputeRefundFingerprint(order.PaymentId, 5m, null),
+            DateTime.UtcNow.AddMinutes(-1),
+            TimeSpan.FromSeconds(30));
+
+        var response = await RefundAsync(
+            _client,
+            order.PaymentId,
+            5m,
+            null,
+            idempotencyKey);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var attempt = await GetPaymentAttemptAsync(idempotencyKey);
+        Assert.NotNull(attempt);
+        Assert.Equal(PaymentAttemptStatus.Completed, attempt.Status);
+        Assert.Equal(200, attempt.ResponseStatusCode);
+
+        var stored = await GetPaymentWithRefundsAsync(order.PaymentId);
+        Assert.NotNull(stored);
+        Assert.Equal(5m, stored.RefundedAmount.Amount);
+    }
+
+    [Fact]
+    public async Task Refund_WhenAttemptsAreConcurrent_BothSucceedWithoutLostUpdate()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+        await ConfirmAsync(_client, order.PaymentId, "refund-concurrent-confirm-1");
+
+        var responses = await Task.WhenAll(
+            Task.Run(() => RefundAsync(_client, order.PaymentId, 5m, null, "refund-concurrent-1")),
+            Task.Run(() => RefundAsync(_client, order.PaymentId, 6m, null, "refund-concurrent-2")));
+
+        Assert.All(responses, response => Assert.Equal(HttpStatusCode.OK, response.StatusCode));
+
+        var stored = await GetPaymentWithRefundsAsync(order.PaymentId);
+        Assert.NotNull(stored);
+        Assert.Equal(11m, stored.RefundedAmount.Amount);
+        Assert.Equal(PaymentStatus.Confirmed, stored.Status);
+        Assert.Equal(2, stored.Refunds.Count);
+    }
+
+    [Theory]
+    [InlineData(Alice)]
+    [InlineData(Bob)]
+    public async Task Refund_WhenUserIsNotAdmin_Returns403(string user)
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+
+        var response = await RefundAsync(
+            _client,
+            order.PaymentId,
+            1m,
+            null,
+            "refund-non-admin-1",
+            user);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("forbidden", error.Code);
+    }
+
+    [Fact]
+    public async Task Refund_WhenEnvironmentIsProduction_Returns404()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+
+        using var factory = new CustomWebApplicationFactory(
+            _fixture.ConnectionString,
+            environment: "Production");
+        using var client = factory.CreateClient();
+
+        var response = await RefundAsync(
+            client,
+            order.PaymentId,
+            1m,
+            null,
+            "refund-production-1");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Refund_WithoutIdempotencyKey_Returns400ValidationErrorAndDoesNotCreateAttempt()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+        await ConfirmAsync(_client, order.PaymentId, "refund-no-key-confirm-1");
+        var attemptsBefore = (await GetPaymentAttemptsAsync()).Count;
+
+        var response = await RefundAsync(
+            _client,
+            order.PaymentId,
+            5m,
+            null,
+            idempotencyKey: null);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("validation_error", error.Code);
+        Assert.Equal(attemptsBefore, (await GetPaymentAttemptsAsync()).Count);
+
+        var stored = await GetPaymentWithRefundsAsync(order.PaymentId);
+        Assert.NotNull(stored);
+        Assert.Equal(0m, stored.RefundedAmount.Amount);
+        Assert.Empty(stored.Refunds);
+    }
+
     private CustomWebApplicationFactory CreateFactory(
         MockPaymentProvider provider,
         NotificationCapture capture)
@@ -472,6 +889,30 @@ public class PaymentsEndpointTests : IAsyncLifetime
         return client.SendAsync(request);
     }
 
+    private static Task<HttpResponseMessage> RefundAsync(
+        HttpClient client,
+        Guid paymentId,
+        decimal amount,
+        string? reason,
+        string? idempotencyKey,
+        string testUser = Admin)
+    {
+        var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/payments/{paymentId}/refund")
+        {
+            Content = JsonContent.Create(new { amount, reason })
+        };
+        request.Headers.Add("X-Test-User", testUser);
+
+        if (idempotencyKey is not null)
+        {
+            request.Headers.Add("Idempotency-Key", idempotencyKey);
+        }
+
+        return client.SendAsync(request);
+    }
+
     private async Task<Guid> GetActiveProductIdAsync(string name)
     {
         await using var context = CreateContext();
@@ -495,6 +936,15 @@ public class PaymentsEndpointTests : IAsyncLifetime
         await using var context = CreateContext();
         return await context.Payments
             .AsNoTracking()
+            .FirstOrDefaultAsync(payment => payment.Id == paymentId);
+    }
+
+    private async Task<Payment?> GetPaymentWithRefundsAsync(Guid paymentId)
+    {
+        await using var context = CreateContext();
+        return await context.Payments
+            .AsNoTracking()
+            .Include(payment => payment.Refunds)
             .FirstOrDefaultAsync(payment => payment.Id == paymentId);
     }
 
@@ -573,6 +1023,7 @@ public class PaymentsEndpointTests : IAsyncLifetime
             .Include(payment => payment.Refunds)
             .FirstAsync(payment => payment.Id == paymentId);
 
+        payment.MarkConfirmed(DateTime.UtcNow);
         payment.AddRefund(payment.Amount, DateTime.UtcNow);
         await context.SaveChangesAsync();
     }
@@ -601,6 +1052,20 @@ public class PaymentsEndpointTests : IAsyncLifetime
     {
         var id = paymentId.ToString();
         var input = $"POST /api/payments/{id}/confirm\n{id}";
+        return SHA256.HashData(Encoding.UTF8.GetBytes(input));
+    }
+
+    private static byte[] ComputeRefundFingerprint(
+        Guid paymentId,
+        decimal amount,
+        string? reason)
+    {
+        var id = paymentId.ToString();
+        var normalizedAmount = decimal
+            .Round(amount, 2, MidpointRounding.AwayFromZero)
+            .ToString("0.00", CultureInfo.InvariantCulture);
+        var normalizedReason = string.IsNullOrWhiteSpace(reason) ? string.Empty : reason.Trim();
+        var input = $"POST /api/payments/{id}/refund\n{id}\n{normalizedAmount}\n{normalizedReason}";
         return SHA256.HashData(Encoding.UTF8.GetBytes(input));
     }
 

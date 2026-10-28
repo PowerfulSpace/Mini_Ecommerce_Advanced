@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using NSubstitute;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Domain;
+using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Payments;
 using PS.MiniEcommerce.Infrastructure;
 using PS.MiniEcommerce.Infrastructure.Persistence;
@@ -24,13 +25,17 @@ public class AdminEndpointTests : IAsyncLifetime
     private const string WirelessMouse = "Wireless Mouse";
 
     private readonly TestDatabaseFixture _fixture;
+    private readonly NotificationCapture _capture;
     private readonly CustomWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
     public AdminEndpointTests(TestDatabaseFixture fixture)
     {
         _fixture = fixture;
-        _factory = new CustomWebApplicationFactory(fixture.ConnectionString);
+        _capture = new NotificationCapture();
+        _factory = new CustomWebApplicationFactory(
+            fixture.ConnectionString,
+            notificationCapture: _capture);
         _client = _factory.CreateClient();
     }
 
@@ -382,6 +387,23 @@ public class AdminEndpointTests : IAsyncLifetime
         Assert.Equal(stockAfterCheckout.Available + 2, stockAfterReturn.Available);
         Assert.Equal(stockAfterCheckout.Reserved, stockAfterReturn.Reserved);
 
+        var payment = await GetPaymentByOrderIdAsync(orderId);
+        Assert.NotNull(payment);
+        Assert.Equal(PaymentStatus.Refunded, payment.Status);
+        Assert.Equal(payment.Amount.Amount, payment.RefundedAmount.Amount);
+        Assert.NotNull(payment.RefundedAtUtc);
+        Assert.Single(payment.Refunds);
+
+        var paymentRefunded = Assert.Single(_capture.Events.OfType<PaymentRefunded>());
+        Assert.Equal(payment.Id, paymentRefunded.PaymentId);
+        Assert.Equal(payment.Amount.Amount, paymentRefunded.Amount.Amount);
+        Assert.Null(paymentRefunded.Reason);
+
+        var refundAudit = await GetAuditLogAsync("PaymentRefunded");
+        Assert.Equal("Payment", refundAudit.EntityType);
+        Assert.Equal(payment.Id, refundAudit.EntityId);
+        Assert.Equal(adminUserId, refundAudit.ActorUserId);
+
         var auditLog = await GetAuditLogAsync("OrderReturned");
         Assert.Equal("Order", auditLog.EntityType);
         Assert.Equal(orderId, auditLog.EntityId);
@@ -644,6 +666,15 @@ public class AdminEndpointTests : IAsyncLifetime
             .FirstAsync();
     }
 
+    private async Task<Payment?> GetPaymentByOrderIdAsync(Guid orderId)
+    {
+        await using var context = CreateContext();
+        return await context.Payments
+            .AsNoTracking()
+            .Include(payment => payment.Refunds)
+            .FirstOrDefaultAsync(payment => payment.OrderId == orderId);
+    }
+
     private async Task<Guid?> SetStatusAsync(Guid orderId, OrderStatus status)
     {
         await using var context = CreateContext();
@@ -662,6 +693,18 @@ public class AdminEndpointTests : IAsyncLifetime
             context.Payments.Add(payment);
             await context.SaveChangesAsync();
             storedPaymentId = payment.Id;
+        }
+
+        if (status is OrderStatus.Paid or OrderStatus.Shipped or OrderStatus.Delivered)
+        {
+            var payment = await context.Payments
+                .FirstAsync(payment => payment.Id == storedPaymentId!.Value);
+
+            if (payment.Status == PaymentStatus.Pending)
+            {
+                payment.MarkConfirmed(DateTime.UtcNow);
+                await context.SaveChangesAsync();
+            }
         }
 
         var affected = await context.Orders

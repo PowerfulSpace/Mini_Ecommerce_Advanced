@@ -10,4 +10,5 @@ public sealed record PaymentRefunded(
     Guid PaymentId,
     Guid OrderId,
     Money Amount,
-    DateTime OccurredAtUtc);
+    DateTime OccurredAtUtc,
+    string? Reason = null);

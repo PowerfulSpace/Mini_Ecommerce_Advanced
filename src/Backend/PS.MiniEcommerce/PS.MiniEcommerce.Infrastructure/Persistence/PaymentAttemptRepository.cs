@@ -142,6 +142,22 @@ public class PaymentAttemptRepository : IPaymentAttemptRepository
         return affected == 1;
     }
 
+    public async Task CompleteAsync(
+        Guid attemptId,
+        Guid paymentId,
+        int statusCode,
+        string responsePayload,
+        DateTime utcNow,
+        CancellationToken cancellationToken)
+    {
+        var attempt = await _dbContext.PaymentAttempts
+            .FirstAsync(paymentAttempt => paymentAttempt.Id == attemptId, cancellationToken);
+
+        attempt.MarkCompleted(paymentId, statusCode, responsePayload, utcNow);
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+
     public async Task CompleteWithErrorAsync(
         Guid attemptId,
         int statusCode,

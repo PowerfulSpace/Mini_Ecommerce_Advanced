@@ -46,6 +46,10 @@ public static class DependencyInjection
 
         services.AddScoped<IConfirmTransactionExecutor, ConfirmTransactionExecutor>();
 
+        services.AddScoped<IPaymentRefundService, PaymentRefundService>();
+
+        services.AddScoped<IRefundTransactionExecutor, RefundTransactionExecutor>();
+
         return services;
     }
 }

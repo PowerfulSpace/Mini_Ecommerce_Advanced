@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
 using PS.MiniEcommerce.Domain.Exceptions;
 using PS.MiniEcommerce.Infrastructure;
+using PS.MiniEcommerce.Infrastructure.Payments;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 using PS.MiniEcommerce.Infrastructure.Seed;
 using PS.MiniEcommerce.IntegrationTests.Fixtures;
@@ -44,7 +45,7 @@ public class ConsumeReservedTests : IAsyncLifetime
 
         await using (var context = CreateContext())
         {
-            var repository = new OrderRepository(context);
+            var repository = new OrderRepository(context, new PaymentRepository(context), new PaymentRefundService());
             await repository.ConsumeReservedAsync(orderId, CancellationToken.None);
         }
 
@@ -64,7 +65,7 @@ public class ConsumeReservedTests : IAsyncLifetime
 
         await using (var context = CreateContext())
         {
-            var repository = new OrderRepository(context);
+            var repository = new OrderRepository(context, new PaymentRepository(context), new PaymentRefundService());
 
             var exception = await Assert.ThrowsAsync<DomainConflictException>(
                 () => repository.ConsumeReservedAsync(orderId, CancellationToken.None));

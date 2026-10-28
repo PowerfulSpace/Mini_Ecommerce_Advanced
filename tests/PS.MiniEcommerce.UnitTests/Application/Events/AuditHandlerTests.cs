@@ -313,6 +313,43 @@ public class AuditHandlerTests
     }
 
     [Fact]
+    public async Task Handle_PaymentRefunded_WritesAuditEntryForCurrentUser()
+    {
+        var paymentId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var domainEvent = new PaymentRefunded(
+            paymentId,
+            orderId,
+            Money.FromDecimal(9.99m),
+            FixedUtcNow,
+            "damaged");
+        var repository = Substitute.For<IAuditLogRepository>();
+        AuditLogEntry? captured = null;
+        repository
+            .AddAsync(Arg.Do<AuditLogEntry>(entry => captured = entry), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var currentUser = Substitute.For<ICurrentUser>();
+        currentUser.UserId.Returns(UserId);
+        var handler = CreateHandler(repository, currentUser: currentUser);
+
+        await handler.Handle(
+            new DomainEventNotification<object>(domainEvent),
+            CancellationToken.None);
+
+        Assert.NotNull(captured);
+        Assert.Equal("PaymentRefunded", captured.Action);
+        Assert.Equal("Payment", captured.EntityType);
+        Assert.Equal(paymentId, captured.EntityId);
+        Assert.Equal(UserId, captured.ActorUserId);
+        Assert.Equal(FixedUtcNow, captured.OccurredAtUtc);
+
+        using var payload = JsonDocument.Parse(captured.Payload!);
+        Assert.Equal(orderId, payload.RootElement.GetProperty("orderId").GetGuid());
+        Assert.Equal(9.99m, payload.RootElement.GetProperty("amount").GetDecimal());
+        Assert.Equal("damaged", payload.RootElement.GetProperty("reason").GetString());
+    }
+
+    [Fact]
     public async Task Handle_ProductEventWithoutCurrentUser_WritesNullActor()
     {
         var domainEvent = new ProductDeactivated(ProductId, FixedUtcNow);
