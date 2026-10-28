@@ -36,4 +36,37 @@ public class AdminCommandValidatorTests
         Assert.False(result.IsValid);
         Assert.Contains(result.Errors, error => error.PropertyName == "ProductId");
     }
+
+    [Fact]
+    public void ShipValidator_WithEmptyOrderId_IsInvalid()
+    {
+        var validator = new AdminShipOrderValidator();
+
+        var result = validator.Validate(new AdminShipOrderCommand(Guid.Empty));
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.PropertyName == "OrderId");
+    }
+
+    [Fact]
+    public void DeliverValidator_WithEmptyOrderId_IsInvalid()
+    {
+        var validator = new AdminDeliverOrderValidator();
+
+        var result = validator.Validate(new AdminDeliverOrderCommand(Guid.Empty));
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.PropertyName == "OrderId");
+    }
+
+    [Fact]
+    public void ReturnValidator_WithEmptyOrderId_IsInvalid()
+    {
+        var validator = new AdminReturnOrderValidator();
+
+        var result = validator.Validate(new AdminReturnOrderCommand(Guid.Empty));
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, error => error.PropertyName == "OrderId");
+    }
 }

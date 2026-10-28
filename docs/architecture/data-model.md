@@ -112,6 +112,7 @@ SQL Server — целевая реляционная база данных, а E
 | `Reserved` | `int` | Обязательно; неотрицательно |
 | `IsActive` | `bit` | Обязательно |
 | `CreatedAtUtc` | `datetime2` | Обязательно; UTC |
+| `RowVersion` | `rowversion` | NOT NULL; shadow property (EF), не публичное свойство Domain; используется для optimistic concurrency admin stock; не раскрывается в API |
 
 Требования:
 
@@ -126,6 +127,9 @@ SQL Server — целевая реляционная база данных, а E
 - При создании заказа оформление заказа использует текущую цену товара.
 - Резервирование и восстановление запаса должны быть атомарными и выполняться
   только при достаточном запасе.
+- `RowVersion` — shadow property EF, `IsRowVersion()`; не публичное свойство
+  Domain; используется для optimistic concurrency admin stock (ADR-009); в
+  публичном API и DTO не раскрывается.
 
 Ограничение CHECK базы данных должно обеспечивать `Available >= 0`,
 `Reserved >= 0` и `Price >= 0`. `Description` обязателен; ограничение длины —
@@ -794,7 +798,7 @@ refund повторно; проигравшие попытки получают 
 
 ## 11. Схема миграций
 
-Новые миграции (в порядке применения):
+Реализованные миграции (в порядке применения):
 
 1. `AddOrderStatusesAndPaymentId` (этап 13) — расширяет CHECK `Order.Status` до
    шести статусов и добавляет `Order.PaymentId` (`uniqueidentifier NULL`) без FK.
@@ -807,16 +811,26 @@ refund повторно; проигравшие попытки получают 
    `Order.RowVersion` (`rowversion NOT NULL`) и создаёт таблицу
    `OrderItemCancellations` (FK `OrderItemId → OrderItems.Id` с `Restrict`,
    CHECK `Quantity > 0`, индекс по `OrderItemId`).
-5. `AddPaymentsAndRefunds` (этап 19) — создаёт `Payment` и `Refund`; добавляет FK
+5. `AddAuditLog` (этап 17) — создаёт `AuditLog`.
+6. `AddUserRole` (этап 18) — добавляет `User.Role`:
+   `nvarchar(20) NOT NULL DEFAULT 'customer'`, CHECK `IN ('customer', 'admin')`;
+   конвертер lowercase.
+7. `AddProductRowVersion` (этап 18) — добавляет `Products.RowVersion`
+   (`rowversion NOT NULL`, shadow property).
+
+Будущие миграции (в порядке применения):
+
+8. `AddPaymentsAndRefunds` (этап 19) — создаёт `Payment` и `Refund`; добавляет FK
    `Order.PaymentId → Payment`. Выполняется после
    `AddOrderStatusesAndPaymentId`.
-6. `AddPaymentAttempts` — создаёт `PaymentAttempt`; выполняется после
+9. `AddPaymentAttempts` — создаёт `PaymentAttempt`; выполняется после
    `AddPaymentsAndRefunds`.
-7. `AddAuditLog` — создаёт `AuditLog`.
 
 Порядок миграций должен соответствовать зависимостям внешних ключей. FK
 `Order.PaymentId → Payment` создаётся в `AddPaymentsAndRefunds`. Поле
 `Order.PaymentId` уже добавлено в `AddOrderStatusesAndPaymentId`.
+`AddAuditLog` применён после `AddOrderRowVersionAndCancellations` и до
+`AddUserRole`; `AddUserRole` и `AddProductRowVersion` не зависят от FK платежей.
 
 ## 12. Будущее развитие
 

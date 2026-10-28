@@ -24,5 +24,20 @@ public interface IOrderRepository
         IReadOnlyList<(Guid OrderItemId, int Quantity)>? items,
         CancellationToken cancellationToken);
 
+    Task<(OrderTransitionResult Result, Order? Order, OrderStatus? CurrentStatus, byte[]? NewRowVersion, IReadOnlyList<object> DomainEvents)> ShipAsync(
+        Guid orderId,
+        DateTime utcNow,
+        CancellationToken cancellationToken);
+
+    Task<(OrderTransitionResult Result, Order? Order, OrderStatus? CurrentStatus, byte[]? NewRowVersion, IReadOnlyList<object> DomainEvents)> DeliverAsync(
+        Guid orderId,
+        DateTime utcNow,
+        CancellationToken cancellationToken);
+
+    Task<(OrderTransitionResult Result, Order? Order, OrderStatus? CurrentStatus, byte[]? NewRowVersion, IReadOnlyList<object> DomainEvents)> ReturnAsync(
+        Guid orderId,
+        DateTime utcNow,
+        CancellationToken cancellationToken);
+
     Task ConsumeReservedAsync(Guid orderId, CancellationToken cancellationToken);
 }

@@ -40,6 +40,10 @@
   [ADR-008](adr/ADR-008-payments-and-idempotency.md).
 - Admin API и роль admin определены в
   [ADR-009](adr/ADR-009-admin-api-and-roles.md).
+- `User.Role` — `Customer`/`Admin`, конвертер lowercase, CHECK
+  `IN ('customer', 'admin')`, default `'customer'`; admin seed —
+  `admin@example.com`. См. [ADR-009](adr/ADR-009-admin-api-and-roles.md),
+  [data-model.md](architecture/data-model.md) §4.1.
 - Аудит через события определён в [ADR-010](adr/ADR-010-audit.md).
 
 ### 1.1 Структура репозитория и именование
@@ -571,6 +575,24 @@ MVP+ не включает:
 - `OrderItemCancellation.Reason`: `Reason` не передаётся через API (body
   `api.md` его не описывает); поле nullable и заполняется `null` из API.
   Внутренние сценарии могут заполнять позже.
+- `admin_stock_conflict`: реальная SQL-гонка admin stock (два параллельных
+  admin stock) не покрыта integration-тестом; логика retry и
+  `409 admin_stock_conflict` покрыты unit/stub. SQL-тест — вне MVP+ или
+  отдельный этап.
+- Конкурентные admin ship/deliver/return: покрыты `UPDLOCK` + guard статуса;
+  отдельный integration-тест SQL-гонки не добавлен. Вне MVP+.
+- `If-Match` не требуется для admin ship/deliver/return; защита — `UPDLOCK` +
+  условный переход статуса. `If-Match` — только для
+  `POST /api/orders/{id}/cancel`.
+- На этапе 18 Return не выполняет refund и не возвращает `refund_not_allowed`;
+  refund при `Delivered → Returned` — этап 19. `Payment.Status` при return не
+  проверяется.
+- `DOMAIN.md` §13 упоминает `admin_forbidden`; источники истины (`api.md` §4.1,
+  `SPEC.md`, `ADR-009`) используют `forbidden`. Реализовано `forbidden`;
+  `DOMAIN.md` не синхронизирован.
+- `Product.Deactivate` поднимает `ProductDeactivated` только при фактическом
+  изменении (`IsActive` true → false); повторная деактивация — no-op, без
+  события и audit.
 
 Примечание: путь «недостижимого» конфликта D2 теперь возвращает временный
 `503 checkout_retry` (попытка остаётся `InProgress`), а не `500`.

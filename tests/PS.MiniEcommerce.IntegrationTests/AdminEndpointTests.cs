@@ -8,6 +8,7 @@ using NSubstitute;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Infrastructure;
+using PS.MiniEcommerce.Infrastructure.Persistence;
 using PS.MiniEcommerce.Infrastructure.Seed;
 using PS.MiniEcommerce.IntegrationTests.Fixtures;
 
@@ -249,6 +250,251 @@ public class AdminEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Admin_CanShipPaidOrderAndAuditUsesAdminActor()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
+        var stockAfterCheckout = await GetStockAsync(WirelessMouse);
+        var adminUserId = await GetUserIdAsync(SeedData.AdminEmail);
+        await SetStatusAsync(orderId, OrderStatus.Paid, Guid.NewGuid());
+        var etagBefore = await GetOrderETagAsync(Alice, orderId);
+
+        var response = await SendAdminAsync(
+            HttpMethod.Post,
+            $"/api/admin/orders/{orderId}/ship",
+            Admin);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(response.Headers.ETag);
+        Assert.NotEqual(etagBefore, response.Headers.ETag!.Tag);
+        var order = await response.Content.ReadFromJsonAsync<OrderDetailResponse>();
+        Assert.NotNull(order);
+        Assert.Equal(orderId, order.Id);
+        Assert.Equal("Shipped", order.Status);
+
+        Assert.Equal(OrderStatus.Shipped, await GetOrderStatusAsync(orderId));
+        Assert.Equal(stockAfterCheckout, await GetStockAsync(WirelessMouse));
+
+        var auditLog = await GetAuditLogAsync("OrderShipped");
+        Assert.Equal("Order", auditLog.EntityType);
+        Assert.Equal(orderId, auditLog.EntityId);
+        Assert.Equal(adminUserId, auditLog.ActorUserId);
+        Assert.Null(auditLog.Payload);
+    }
+
+    [Fact]
+    public async Task AdminShip_WhenOrderIsCreated_Returns409InvalidOrderTransition()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+        var stockBefore = await GetStockAsync(WirelessMouse);
+
+        var response = await SendAdminAsync(
+            HttpMethod.Post,
+            $"/api/admin/orders/{orderId}/ship",
+            Admin);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("invalid_order_transition", error.Code);
+
+        Assert.Equal(OrderStatus.Created, await GetOrderStatusAsync(orderId));
+        Assert.Equal(stockBefore, await GetStockAsync(WirelessMouse));
+        await using var context = CreateContext();
+        Assert.Equal(0, await context.AuditLogs.CountAsync(log => log.Action == "OrderShipped"));
+    }
+
+    [Fact]
+    public async Task Admin_CanDeliverShippedOrderAndAuditUsesAdminActor()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+        var adminUserId = await GetUserIdAsync(SeedData.AdminEmail);
+        await SetStatusAsync(orderId, OrderStatus.Shipped);
+        var etagBefore = await GetOrderETagAsync(Alice, orderId);
+
+        var response = await SendAdminAsync(
+            HttpMethod.Post,
+            $"/api/admin/orders/{orderId}/deliver",
+            Admin);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(response.Headers.ETag);
+        Assert.NotEqual(etagBefore, response.Headers.ETag!.Tag);
+        var order = await response.Content.ReadFromJsonAsync<OrderDetailResponse>();
+        Assert.NotNull(order);
+        Assert.Equal(orderId, order.Id);
+        Assert.Equal("Delivered", order.Status);
+
+        Assert.Equal(OrderStatus.Delivered, await GetOrderStatusAsync(orderId));
+
+        var auditLog = await GetAuditLogAsync("OrderDelivered");
+        Assert.Equal("Order", auditLog.EntityType);
+        Assert.Equal(orderId, auditLog.EntityId);
+        Assert.Equal(adminUserId, auditLog.ActorUserId);
+        Assert.Null(auditLog.Payload);
+    }
+
+    [Fact]
+    public async Task AdminDeliver_WhenOrderIsPaid_Returns409InvalidOrderTransition()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+        await SetStatusAsync(orderId, OrderStatus.Paid, Guid.NewGuid());
+
+        var response = await SendAdminAsync(
+            HttpMethod.Post,
+            $"/api/admin/orders/{orderId}/deliver",
+            Admin);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("invalid_order_transition", error.Code);
+
+        Assert.Equal(OrderStatus.Paid, await GetOrderStatusAsync(orderId));
+    }
+
+    [Fact]
+    public async Task Admin_CanReturnDeliveredOrderAndRestoresAvailableWithoutChangingReserved()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
+        var stockAfterCheckout = await GetStockAsync(WirelessMouse);
+        var adminUserId = await GetUserIdAsync(SeedData.AdminEmail);
+        var paymentId = Guid.NewGuid();
+        await SetStatusAsync(orderId, OrderStatus.Delivered, paymentId);
+        var etagBefore = await GetOrderETagAsync(Alice, orderId);
+
+        var response = await SendAdminAsync(
+            HttpMethod.Post,
+            $"/api/admin/orders/{orderId}/return",
+            Admin);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(response.Headers.ETag);
+        Assert.NotEqual(etagBefore, response.Headers.ETag!.Tag);
+        var order = await response.Content.ReadFromJsonAsync<OrderDetailResponse>();
+        Assert.NotNull(order);
+        Assert.Equal(orderId, order.Id);
+        Assert.Equal("Returned", order.Status);
+
+        Assert.Equal(OrderStatus.Returned, await GetOrderStatusAsync(orderId));
+        Assert.Equal(paymentId, await GetPaymentIdAsync(orderId));
+
+        var stockAfterReturn = await GetStockAsync(WirelessMouse);
+        Assert.Equal(stockAfterCheckout.Available + 2, stockAfterReturn.Available);
+        Assert.Equal(stockAfterCheckout.Reserved, stockAfterReturn.Reserved);
+
+        var auditLog = await GetAuditLogAsync("OrderReturned");
+        Assert.Equal("Order", auditLog.EntityType);
+        Assert.Equal(orderId, auditLog.EntityId);
+        Assert.Equal(adminUserId, auditLog.ActorUserId);
+        Assert.Null(auditLog.Payload);
+    }
+
+    [Fact]
+    public async Task AdminReturn_AfterPartialCancellation_RestoresOnlyRemainingQuantity()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
+        var stockAfterCheckout = await GetStockAsync(WirelessMouse);
+        var itemId = await GetOrderItemIdAsync(orderId);
+        var etag = await GetOrderETagAsync(Alice, orderId);
+
+        var cancelRequest = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/orders/{orderId}/cancel")
+        {
+            Content = JsonContent.Create(new
+            {
+                items = new[] { new { orderItemId = itemId, quantity = 1 } }
+            })
+        };
+        cancelRequest.Headers.Add("X-Test-User", Alice);
+        cancelRequest.Headers.Add("If-Match", etag);
+        var cancelResponse = await _client.SendAsync(cancelRequest);
+        cancelResponse.EnsureSuccessStatusCode();
+
+        var stockAfterPartialCancel = await GetStockAsync(WirelessMouse);
+        Assert.Equal(stockAfterCheckout.Available + 1, stockAfterPartialCancel.Available);
+        Assert.Equal(stockAfterCheckout.Reserved - 1, stockAfterPartialCancel.Reserved);
+
+        await SetStatusAsync(orderId, OrderStatus.Delivered, Guid.NewGuid());
+
+        var response = await SendAdminAsync(
+            HttpMethod.Post,
+            $"/api/admin/orders/{orderId}/return",
+            Admin);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var order = await response.Content.ReadFromJsonAsync<OrderDetailResponse>();
+        Assert.NotNull(order);
+        Assert.Equal("Returned", order.Status);
+        Assert.Equal(1, Assert.Single(order.Items).CancelledQuantity);
+
+        var stockAfterReturn = await GetStockAsync(WirelessMouse);
+        Assert.Equal(stockAfterCheckout.Available + 2, stockAfterReturn.Available);
+        Assert.Equal(stockAfterPartialCancel.Reserved, stockAfterReturn.Reserved);
+    }
+
+    [Fact]
+    public async Task AdminReturn_WhenOrderIsPaid_Returns409InvalidOrderTransition()
+    {
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
+        var stockBefore = await GetStockAsync(WirelessMouse);
+        await SetStatusAsync(orderId, OrderStatus.Paid, Guid.NewGuid());
+
+        var response = await SendAdminAsync(
+            HttpMethod.Post,
+            $"/api/admin/orders/{orderId}/return",
+            Admin);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("invalid_order_transition", error.Code);
+
+        Assert.Equal(OrderStatus.Paid, await GetOrderStatusAsync(orderId));
+        Assert.Equal(stockBefore, await GetStockAsync(WirelessMouse));
+    }
+
+    [Theory]
+    [InlineData(Alice, "ship")]
+    [InlineData(Alice, "deliver")]
+    [InlineData(Alice, "return")]
+    [InlineData(Bob, "ship")]
+    [InlineData(Bob, "deliver")]
+    [InlineData(Bob, "return")]
+    public async Task NonAdmin_CannotTransitionOrders(string user, string action)
+    {
+        var response = await SendAdminAsync(
+            HttpMethod.Post,
+            $"/api/admin/orders/{Guid.NewGuid()}/{action}",
+            user);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("forbidden", error.Code);
+    }
+
+    [Theory]
+    [InlineData("ship")]
+    [InlineData("deliver")]
+    [InlineData("return")]
+    public async Task AdminOrderEndpoints_AreNotFoundInProduction(string action)
+    {
+        using var factory = new CustomWebApplicationFactory(
+            _fixture.ConnectionString,
+            environment: "Production");
+        using var client = factory.CreateClient();
+
+        var response = await SendAdminAsync(
+            HttpMethod.Post,
+            $"/api/admin/orders/{Guid.NewGuid()}/{action}",
+            Admin,
+            client: client);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Seed_CreatesAdminAndCustomerRolesIdempotently()
     {
         await using (var context = CreateContext())
@@ -299,11 +545,11 @@ public class AdminEndpointTests : IAsyncLifetime
         return await (client ?? _client).SendAsync(request);
     }
 
-    private async Task<Guid> GetActiveProductIdAsync()
+    private async Task<Guid> GetActiveProductIdAsync(string name = WirelessMouse)
     {
         await using var context = CreateContext();
         return await context.Products
-            .Where(product => product.Name == WirelessMouse && product.IsActive)
+            .Where(product => product.Name == name && product.IsActive)
             .Select(product => product.Id)
             .FirstAsync();
     }
@@ -317,6 +563,108 @@ public class AdminEndpointTests : IAsyncLifetime
             .SingleAsync();
     }
 
+    private async Task<Guid> CreateOrderAsync(string testUser, string productName, int quantity)
+    {
+        var productId = await GetActiveProductIdAsync(productName);
+
+        var cartRequest = new HttpRequestMessage(HttpMethod.Get, "/api/cart");
+        cartRequest.Headers.Add("X-Test-User", testUser);
+        var cartResponse = await _client.SendAsync(cartRequest);
+        cartResponse.EnsureSuccessStatusCode();
+        var etag = cartResponse.Headers.ETag!.Tag;
+
+        var addRequest = new HttpRequestMessage(HttpMethod.Post, "/api/cart/items")
+        {
+            Content = JsonContent.Create(new { productId, quantity })
+        };
+        addRequest.Headers.Add("X-Test-User", testUser);
+        addRequest.Headers.Add("If-Match", etag);
+        var addResponse = await _client.SendAsync(addRequest);
+        addResponse.EnsureSuccessStatusCode();
+        var newEtag = addResponse.Headers.ETag!.Tag;
+
+        var orderRequest = new HttpRequestMessage(HttpMethod.Post, "/api/orders");
+        orderRequest.Headers.Add("X-Test-User", testUser);
+        orderRequest.Headers.Add("Idempotency-Key", $"admin-order-{Guid.NewGuid():N}".Substring(0, 32));
+        orderRequest.Headers.Add("If-Match", newEtag);
+        var orderResponse = await _client.SendAsync(orderRequest);
+        orderResponse.EnsureSuccessStatusCode();
+
+        var location = orderResponse.Headers.Location!.ToString();
+        return Guid.Parse(location.Split('/').Last());
+    }
+
+    private async Task<Guid> GetOrderItemIdAsync(Guid orderId)
+    {
+        await using var context = CreateContext();
+        return await context.OrderItems
+            .Where(item => item.OrderId == orderId)
+            .Select(item => item.Id)
+            .FirstAsync();
+    }
+
+    private async Task<string> GetOrderETagAsync(string testUser, Guid orderId)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, $"/api/orders/{orderId}");
+        request.Headers.Add("X-Test-User", testUser);
+        var response = await _client.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+        return response.Headers.ETag!.Tag;
+    }
+
+    private async Task<StockSnapshot> GetStockAsync(string productName)
+    {
+        await using var context = CreateContext();
+        var stock = await context.Products
+            .AsNoTracking()
+            .Where(product => product.Name == productName)
+            .Select(product => new { product.Available, product.Reserved })
+            .FirstAsync();
+
+        return new StockSnapshot(stock.Available, stock.Reserved);
+    }
+
+    private async Task<OrderStatus> GetOrderStatusAsync(Guid orderId)
+    {
+        await using var context = CreateContext();
+        return await context.Orders
+            .AsNoTracking()
+            .Where(order => order.Id == orderId)
+            .Select(order => order.Status)
+            .FirstAsync();
+    }
+
+    private async Task<Guid?> GetPaymentIdAsync(Guid orderId)
+    {
+        await using var context = CreateContext();
+        return await context.Orders
+            .AsNoTracking()
+            .Where(order => order.Id == orderId)
+            .Select(order => order.PaymentId)
+            .FirstAsync();
+    }
+
+    private async Task SetStatusAsync(Guid orderId, OrderStatus status, Guid? paymentId = null)
+    {
+        await using var context = CreateContext();
+        var affected = await context.Orders
+            .Where(order => order.Id == orderId)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(order => order.Status, status)
+                    .SetProperty(order => order.PaymentId, paymentId));
+
+        Assert.Equal(1, affected);
+    }
+
+    private async Task<AuditLog> GetAuditLogAsync(string action)
+    {
+        await using var context = CreateContext();
+        return await context.AuditLogs
+            .AsNoTracking()
+            .SingleAsync(log => log.Action == action);
+    }
+
     private AppDbContext CreateContext() =>
         new(new DbContextOptionsBuilder<AppDbContext>()
             .UseSqlServer(_fixture.ConnectionString)
@@ -325,4 +673,10 @@ public class AdminEndpointTests : IAsyncLifetime
     private sealed record ErrorResponse(string Code);
 
     private sealed record ProductResponse(Guid Id, string Name, decimal Price, int Available);
+
+    private sealed record OrderDetailResponse(Guid Id, string Status, DateTime CreatedAtUtc, decimal TotalAmount, List<OrderItemResponse> Items);
+
+    private sealed record OrderItemResponse(Guid OrderItemId, Guid ProductId, string ProductName, decimal UnitPrice, int Quantity, int CancelledQuantity, decimal LineTotal);
+
+    private sealed record StockSnapshot(int Available, int Reserved);
 }

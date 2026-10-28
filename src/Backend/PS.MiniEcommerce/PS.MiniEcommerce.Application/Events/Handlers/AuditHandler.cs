@@ -38,6 +38,21 @@ public sealed class AuditHandler : INotificationHandler<DomainEventNotification<
         {
             OrderPlaced orderPlaced => CreateOrderPlacedEntry(orderPlaced),
             OrderCancelled orderCancelled => CreateOrderCancelledEntry(orderCancelled),
+            OrderShipped orderShipped => CreateOrderTransitionEntry(
+                orderShipped.OrderId,
+                "OrderShipped",
+                orderShipped.OccurredAtUtc,
+                GetActorUserId()),
+            OrderDelivered orderDelivered => CreateOrderTransitionEntry(
+                orderDelivered.OrderId,
+                "OrderDelivered",
+                orderDelivered.OccurredAtUtc,
+                GetActorUserId()),
+            OrderReturned orderReturned => CreateOrderTransitionEntry(
+                orderReturned.OrderId,
+                "OrderReturned",
+                orderReturned.OccurredAtUtc,
+                GetActorUserId()),
             ProductDeactivated productDeactivated => CreateProductDeactivatedEntry(
                 productDeactivated,
                 GetActorUserId()),
@@ -102,6 +117,22 @@ public sealed class AuditHandler : INotificationHandler<DomainEventNotification<
             orderCancelled.OrderId,
             payload,
             orderCancelled.OccurredAtUtc,
+            CorrelationId: null);
+    }
+
+    private static AuditLogEntry CreateOrderTransitionEntry(
+        Guid orderId,
+        string action,
+        DateTime occurredAtUtc,
+        Guid? actorUserId)
+    {
+        return new AuditLogEntry(
+            actorUserId,
+            action,
+            "Order",
+            orderId,
+            Payload: null,
+            occurredAtUtc,
             CorrelationId: null);
     }
 
