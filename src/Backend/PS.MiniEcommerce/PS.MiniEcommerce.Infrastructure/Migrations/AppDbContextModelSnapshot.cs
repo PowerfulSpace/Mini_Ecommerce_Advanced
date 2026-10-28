@@ -461,6 +461,62 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                         });
                 });
 
+            modelBuilder.Entity("PS.MiniEcommerce.Infrastructure.Persistence.PaymentAttempt", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<DateTime>("LeaseExpiresAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("PaymentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<byte[]>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("varbinary(32)");
+
+                    b.Property<string>("ResponsePayload")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int?>("ResponseStatusCode")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LeaseExpiresAtUtc");
+
+                    b.HasIndex("PaymentId");
+
+                    b.HasIndex("UserId", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.ToTable("PaymentAttempts", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_PaymentAttempts_Status_Valid", "[Status] IN ('InProgress', 'Completed')");
+                        });
+                });
+
             modelBuilder.Entity("PS.MiniEcommerce.Domain.Cart", b =>
                 {
                     b.HasOne("PS.MiniEcommerce.Domain.User", null)
@@ -556,6 +612,20 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                     b.HasOne("PS.MiniEcommerce.Domain.Order", null)
                         .WithMany()
                         .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("PS.MiniEcommerce.Domain.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PS.MiniEcommerce.Infrastructure.Persistence.PaymentAttempt", b =>
+                {
+                    b.HasOne("PS.MiniEcommerce.Domain.Payments.Payment", null)
+                        .WithMany()
+                        .HasForeignKey("PaymentId")
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("PS.MiniEcommerce.Domain.User", null)

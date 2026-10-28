@@ -39,5 +39,8 @@ public interface IOrderRepository
         DateTime utcNow,
         CancellationToken cancellationToken);
 
-    Task ConsumeReservedAsync(Guid orderId, CancellationToken cancellationToken);
+    Task ConsumeReservedAsync(
+        Guid orderId,
+        CancellationToken cancellationToken,
+        bool useOwnTransaction = true);
 }

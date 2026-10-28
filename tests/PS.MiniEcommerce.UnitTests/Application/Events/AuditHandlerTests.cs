@@ -253,6 +253,66 @@ public class AuditHandlerTests
     }
 
     [Fact]
+    public async Task Handle_OrderPaid_WritesAuditEntryForOrderOwner()
+    {
+        var orderId = Guid.NewGuid();
+        var domainEvent = new OrderPaid(orderId, UserId, FixedUtcNow);
+        var repository = Substitute.For<IAuditLogRepository>();
+        AuditLogEntry? captured = null;
+        repository
+            .AddAsync(Arg.Do<AuditLogEntry>(entry => captured = entry), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var handler = CreateHandler(repository);
+
+        await handler.Handle(
+            new DomainEventNotification<object>(domainEvent),
+            CancellationToken.None);
+
+        Assert.NotNull(captured);
+        Assert.Equal("OrderPaid", captured.Action);
+        Assert.Equal("Order", captured.EntityType);
+        Assert.Equal(orderId, captured.EntityId);
+        Assert.Equal(UserId, captured.ActorUserId);
+        Assert.Null(captured.Payload);
+        Assert.Equal(FixedUtcNow, captured.OccurredAtUtc);
+    }
+
+    [Fact]
+    public async Task Handle_PaymentConfirmed_WritesAuditEntryForCurrentUser()
+    {
+        var paymentId = Guid.NewGuid();
+        var orderId = Guid.NewGuid();
+        var domainEvent = new PaymentConfirmed(
+            paymentId,
+            orderId,
+            Money.FromDecimal(19.99m),
+            FixedUtcNow);
+        var repository = Substitute.For<IAuditLogRepository>();
+        AuditLogEntry? captured = null;
+        repository
+            .AddAsync(Arg.Do<AuditLogEntry>(entry => captured = entry), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var currentUser = Substitute.For<ICurrentUser>();
+        currentUser.UserId.Returns(UserId);
+        var handler = CreateHandler(repository, currentUser: currentUser);
+
+        await handler.Handle(
+            new DomainEventNotification<object>(domainEvent),
+            CancellationToken.None);
+
+        Assert.NotNull(captured);
+        Assert.Equal("PaymentConfirmed", captured.Action);
+        Assert.Equal("Payment", captured.EntityType);
+        Assert.Equal(paymentId, captured.EntityId);
+        Assert.Equal(UserId, captured.ActorUserId);
+        Assert.Equal(FixedUtcNow, captured.OccurredAtUtc);
+
+        using var payload = JsonDocument.Parse(captured.Payload!);
+        Assert.Equal(orderId, payload.RootElement.GetProperty("orderId").GetGuid());
+        Assert.Equal(19.99m, payload.RootElement.GetProperty("amount").GetDecimal());
+    }
+
+    [Fact]
     public async Task Handle_ProductEventWithoutCurrentUser_WritesNullActor()
     {
         var domainEvent = new ProductDeactivated(ProductId, FixedUtcNow);
@@ -274,7 +334,7 @@ public class AuditHandlerTests
     [Fact]
     public async Task Handle_UnknownEvent_LogsWarningAndDoesNotWriteAudit()
     {
-        var domainEvent = new OrderPaid(Guid.NewGuid(), UserId, FixedUtcNow);
+        var domainEvent = new UnknownDomainEvent(Guid.NewGuid(), FixedUtcNow);
         var repository = Substitute.For<IAuditLogRepository>();
         var logger = new RecordingLogger<AuditHandler>();
         var handler = CreateHandler(repository, logger);
@@ -288,7 +348,8 @@ public class AuditHandlerTests
             Arg.Any<CancellationToken>());
         Assert.Contains(
             logger.Messages,
-            message => message.Level == LogLevel.Warning && message.Message.Contains(nameof(OrderPaid)));
+            message => message.Level == LogLevel.Warning
+                && message.Message.Contains(nameof(UnknownDomainEvent)));
     }
 
     private static AuditHandler CreateHandler(
@@ -320,6 +381,8 @@ public class AuditHandlerTests
             UserId,
             new[] { new OrderItemData(ProductId, "Widget", Money.FromDecimal(19.99m), quantity) },
             FixedUtcNow);
+
+    private sealed record UnknownDomainEvent(Guid Id, DateTime OccurredAtUtc);
 
     private sealed class RecordingLogger<T> : ILogger<T>
     {

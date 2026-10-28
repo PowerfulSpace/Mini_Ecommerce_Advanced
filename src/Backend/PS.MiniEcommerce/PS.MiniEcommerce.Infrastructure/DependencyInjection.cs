@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using PS.MiniEcommerce.Application.Abstractions.Payments;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Checkout;
+using PS.MiniEcommerce.Application.Payments;
 using PS.MiniEcommerce.Infrastructure.Checkout;
 using PS.MiniEcommerce.Infrastructure.Payments;
 using PS.MiniEcommerce.Infrastructure.Persistence;
@@ -35,11 +36,15 @@ public static class DependencyInjection
 
         services.AddScoped<ICheckoutAttemptRepository, CheckoutAttemptRepository>();
 
+        services.AddScoped<IPaymentAttemptRepository, PaymentAttemptRepository>();
+
         services.AddScoped<IAuditLogRepository, AuditLogRepository>();
 
         services.AddScoped<IPaymentProvider, MockPaymentProvider>();
 
         services.AddScoped<ICheckoutTransactionExecutor, CheckoutTransactionExecutor>();
+
+        services.AddScoped<IConfirmTransactionExecutor, ConfirmTransactionExecutor>();
 
         return services;
     }

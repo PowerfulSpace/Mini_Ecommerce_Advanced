@@ -28,6 +28,8 @@ public class AppDbContext : DbContext
 
     public DbSet<CheckoutAttempt> CheckoutAttempts => Set<CheckoutAttempt>();
 
+    public DbSet<PaymentAttempt> PaymentAttempts => Set<PaymentAttempt>();
+
     public DbSet<Payment> Payments => Set<Payment>();
 
     public DbSet<Refund> Refunds => Set<Refund>();

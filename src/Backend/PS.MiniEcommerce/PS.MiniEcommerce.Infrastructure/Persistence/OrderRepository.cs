@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Orders;
 using PS.MiniEcommerce.Domain;
@@ -255,38 +256,71 @@ public class OrderRepository : IOrderRepository
         return (OrderTransitionResult.Success, order, currentStatus, newRowVersion, domainEvents);
     }
 
-    public async Task ConsumeReservedAsync(Guid orderId, CancellationToken cancellationToken)
+    public async Task ConsumeReservedAsync(
+        Guid orderId,
+        CancellationToken cancellationToken,
+        bool useOwnTransaction = true)
     {
-        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        IDbContextTransaction? transaction = null;
 
-        var orderItems = await _dbContext.OrderItems
-            .AsNoTracking()
-            .Where(item => item.OrderId == orderId)
-            .OrderBy(item => item.ProductId)
-            .ToListAsync(cancellationToken);
-
-        foreach (var item in orderItems)
+        if (useOwnTransaction)
         {
-            var affected = await _dbContext.Products
-                .Where(product =>
-                    product.Id == item.ProductId
-                    && product.Reserved >= item.Quantity)
-                .ExecuteUpdateAsync(
-                    setters => setters.SetProperty(
-                        product => product.Reserved,
-                        product => product.Reserved - item.Quantity),
-                    cancellationToken);
-
-            if (affected == 0)
-            {
-                await transaction.RollbackAsync(cancellationToken);
-                throw new DomainConflictException(
-                    "Failed to consume reserved stock.",
-                    "conflict");
-            }
+            transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         }
 
-        await transaction.CommitAsync(cancellationToken);
+        try
+        {
+            var orderItems = await _dbContext.OrderItems
+                .AsNoTracking()
+                .Include(item => item.Cancellations)
+                .Where(item => item.OrderId == orderId)
+                .OrderBy(item => item.ProductId)
+                .ToListAsync(cancellationToken);
+
+            foreach (var item in orderItems)
+            {
+                var quantity = item.Quantity - item.CancelledQuantity;
+
+                if (quantity <= 0)
+                {
+                    continue;
+                }
+
+                var affected = await _dbContext.Products
+                    .Where(product =>
+                        product.Id == item.ProductId
+                        && product.Reserved >= quantity)
+                    .ExecuteUpdateAsync(
+                        setters => setters.SetProperty(
+                            product => product.Reserved,
+                            product => product.Reserved - quantity),
+                        cancellationToken);
+
+                if (affected == 0)
+                {
+                    if (transaction is not null)
+                    {
+                        await transaction.RollbackAsync(cancellationToken);
+                    }
+
+                    throw new DomainConflictException(
+                        "Failed to consume reserved stock.",
+                        "conflict");
+                }
+            }
+
+            if (transaction is not null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
+        }
+        finally
+        {
+            if (transaction is not null)
+            {
+                await transaction.DisposeAsync();
+            }
+        }
     }
 
     private async Task<(OrderTransitionResult Result, Order? Order, OrderStatus? CurrentStatus, byte[]? NewRowVersion, IReadOnlyList<object> DomainEvents)> TransitionAsync(

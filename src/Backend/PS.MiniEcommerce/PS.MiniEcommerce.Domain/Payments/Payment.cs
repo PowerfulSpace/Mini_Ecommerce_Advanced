@@ -84,6 +84,18 @@ public class Payment
         Status = PaymentStatus.Failed;
     }
 
+    public void MarkPending()
+    {
+        if (Status != PaymentStatus.Failed)
+        {
+            throw new DomainConflictException(
+                "Only failed payments can be retried.",
+                "payment_failed");
+        }
+
+        Status = PaymentStatus.Pending;
+    }
+
     public void AddRefund(Money amount, DateTime utcNow, string? reason = null)
     {
         if (amount.Amount <= 0)

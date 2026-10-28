@@ -2,6 +2,7 @@ using System.Globalization;
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
 using PS.MiniEcommerce.Application.Behaviors;
+using PS.MiniEcommerce.Application.Payments;
 
 namespace PS.MiniEcommerce.Application;
 
@@ -20,6 +21,8 @@ public static class DependencyInjection
         });
 
         services.AddValidatorsFromAssembly(assembly);
+
+        services.AddScoped<ConfirmAttemptContext>();
 
         return services;
     }
