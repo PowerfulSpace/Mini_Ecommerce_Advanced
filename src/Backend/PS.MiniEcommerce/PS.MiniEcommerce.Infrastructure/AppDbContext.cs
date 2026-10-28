@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using PS.MiniEcommerce.Domain;
+using PS.MiniEcommerce.Domain.Payments;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 
 namespace PS.MiniEcommerce.Infrastructure;
@@ -26,6 +27,10 @@ public class AppDbContext : DbContext
     public DbSet<OrderItemCancellation> OrderItemCancellations => Set<OrderItemCancellation>();
 
     public DbSet<CheckoutAttempt> CheckoutAttempts => Set<CheckoutAttempt>();
+
+    public DbSet<Payment> Payments => Set<Payment>();
+
+    public DbSet<Refund> Refunds => Set<Refund>();
 
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 

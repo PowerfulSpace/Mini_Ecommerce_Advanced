@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using NSubstitute;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Domain;
+using PS.MiniEcommerce.Domain.Payments;
 using PS.MiniEcommerce.Infrastructure;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 using PS.MiniEcommerce.Infrastructure.Seed;
@@ -255,7 +256,7 @@ public class AdminEndpointTests : IAsyncLifetime
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
         var stockAfterCheckout = await GetStockAsync(WirelessMouse);
         var adminUserId = await GetUserIdAsync(SeedData.AdminEmail);
-        await SetStatusAsync(orderId, OrderStatus.Paid, Guid.NewGuid());
+        await SetStatusAsync(orderId, OrderStatus.Paid);
         var etagBefore = await GetOrderETagAsync(Alice, orderId);
 
         var response = await SendAdminAsync(
@@ -337,7 +338,7 @@ public class AdminEndpointTests : IAsyncLifetime
     public async Task AdminDeliver_WhenOrderIsPaid_Returns409InvalidOrderTransition()
     {
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
-        await SetStatusAsync(orderId, OrderStatus.Paid, Guid.NewGuid());
+        await SetStatusAsync(orderId, OrderStatus.Paid);
 
         var response = await SendAdminAsync(
             HttpMethod.Post,
@@ -358,8 +359,7 @@ public class AdminEndpointTests : IAsyncLifetime
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
         var stockAfterCheckout = await GetStockAsync(WirelessMouse);
         var adminUserId = await GetUserIdAsync(SeedData.AdminEmail);
-        var paymentId = Guid.NewGuid();
-        await SetStatusAsync(orderId, OrderStatus.Delivered, paymentId);
+        var paymentId = await SetStatusAsync(orderId, OrderStatus.Delivered);
         var etagBefore = await GetOrderETagAsync(Alice, orderId);
 
         var response = await SendAdminAsync(
@@ -415,7 +415,7 @@ public class AdminEndpointTests : IAsyncLifetime
         Assert.Equal(stockAfterCheckout.Available + 1, stockAfterPartialCancel.Available);
         Assert.Equal(stockAfterCheckout.Reserved - 1, stockAfterPartialCancel.Reserved);
 
-        await SetStatusAsync(orderId, OrderStatus.Delivered, Guid.NewGuid());
+        await SetStatusAsync(orderId, OrderStatus.Delivered);
 
         var response = await SendAdminAsync(
             HttpMethod.Post,
@@ -438,7 +438,7 @@ public class AdminEndpointTests : IAsyncLifetime
     {
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
         var stockBefore = await GetStockAsync(WirelessMouse);
-        await SetStatusAsync(orderId, OrderStatus.Paid, Guid.NewGuid());
+        await SetStatusAsync(orderId, OrderStatus.Paid);
 
         var response = await SendAdminAsync(
             HttpMethod.Post,
@@ -644,17 +644,35 @@ public class AdminEndpointTests : IAsyncLifetime
             .FirstAsync();
     }
 
-    private async Task SetStatusAsync(Guid orderId, OrderStatus status, Guid? paymentId = null)
+    private async Task<Guid?> SetStatusAsync(Guid orderId, OrderStatus status)
     {
         await using var context = CreateContext();
+        var storedPaymentId = await context.Orders
+            .Where(order => order.Id == orderId)
+            .Select(order => order.PaymentId)
+            .FirstAsync();
+
+        if (storedPaymentId is null)
+        {
+            var totalAmount = await context.Orders
+                .Where(order => order.Id == orderId)
+                .Select(order => order.TotalAmount)
+                .FirstAsync();
+            var payment = Payment.Create(orderId, totalAmount, DateTime.UtcNow);
+            context.Payments.Add(payment);
+            await context.SaveChangesAsync();
+            storedPaymentId = payment.Id;
+        }
+
         var affected = await context.Orders
             .Where(order => order.Id == orderId)
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(order => order.Status, status)
-                    .SetProperty(order => order.PaymentId, paymentId));
+                    .SetProperty(order => order.PaymentId, storedPaymentId));
 
         Assert.Equal(1, affected);
+        return storedPaymentId;
     }
 
     private async Task<AuditLog> GetAuditLogAsync(string action)

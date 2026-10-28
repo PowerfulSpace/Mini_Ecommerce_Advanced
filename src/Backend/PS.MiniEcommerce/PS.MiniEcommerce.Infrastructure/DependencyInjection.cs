@@ -1,9 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using PS.MiniEcommerce.Application.Abstractions.Payments;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Checkout;
 using PS.MiniEcommerce.Infrastructure.Checkout;
+using PS.MiniEcommerce.Infrastructure.Payments;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 using PS.MiniEcommerce.Infrastructure.Seed;
 
@@ -29,9 +31,13 @@ public static class DependencyInjection
 
         services.AddScoped<IOrderRepository, OrderRepository>();
 
+        services.AddScoped<IPaymentRepository, PaymentRepository>();
+
         services.AddScoped<ICheckoutAttemptRepository, CheckoutAttemptRepository>();
 
         services.AddScoped<IAuditLogRepository, AuditLogRepository>();
+
+        services.AddScoped<IPaymentProvider, MockPaymentProvider>();
 
         services.AddScoped<ICheckoutTransactionExecutor, CheckoutTransactionExecutor>();
 

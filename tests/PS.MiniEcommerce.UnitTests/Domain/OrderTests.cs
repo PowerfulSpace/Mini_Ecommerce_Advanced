@@ -1,6 +1,7 @@
 using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Exceptions;
+using PS.MiniEcommerce.Domain.Payments;
 
 namespace PS.MiniEcommerce.UnitTests.Domain;
 
@@ -143,6 +144,89 @@ public class OrderTests
         order.MarkPaid();
 
         Assert.Equal(OrderStatus.Paid, order.Status);
+    }
+
+    [Fact]
+    public void SetPaymentId_WhenPaymentIdIsNull_SetsPaymentId()
+    {
+        var order = CreateOrder();
+        var paymentId = Guid.NewGuid();
+
+        order.SetPaymentId(paymentId);
+
+        Assert.Equal(paymentId, order.PaymentId);
+        Assert.Null(order.Payment);
+    }
+
+    [Fact]
+    public void SetPaymentId_WhenAlreadySet_ThrowsDomainConflictException()
+    {
+        var order = CreateOrder();
+        order.SetPaymentId(Guid.NewGuid());
+
+        var exception = Assert.Throws<DomainConflictException>(
+            () => order.SetPaymentId(Guid.NewGuid()));
+
+        Assert.Equal("invalid_order_transition", exception.Code);
+    }
+
+    [Fact]
+    public void SetPayment_SetsPaymentIdAndNavigation()
+    {
+        var order = CreateOrder();
+        var payment = Payment.Create(order.Id, order.TotalAmount, FixedUtcNow);
+
+        order.SetPayment(payment);
+
+        Assert.Equal(payment.Id, order.PaymentId);
+        Assert.Same(payment, order.Payment);
+    }
+
+    [Fact]
+    public void SetPayment_AfterSetPaymentIdWithSamePayment_SetsNavigation()
+    {
+        var order = CreateOrder();
+        var payment = Payment.Create(order.Id, order.TotalAmount, FixedUtcNow);
+        order.SetPaymentId(payment.Id);
+
+        order.SetPayment(payment);
+
+        Assert.Equal(payment.Id, order.PaymentId);
+        Assert.Same(payment, order.Payment);
+    }
+
+    [Fact]
+    public void SetPayment_WithPaymentForAnotherOrder_ThrowsDomainValidationException()
+    {
+        var order = CreateOrder();
+        var payment = Payment.Create(Guid.NewGuid(), order.TotalAmount, FixedUtcNow);
+
+        Assert.Throws<DomainValidationException>(() => order.SetPayment(payment));
+        Assert.Null(order.PaymentId);
+        Assert.Null(order.Payment);
+    }
+
+    [Fact]
+    public void SetPayment_WhenDifferentPaymentAlreadySet_ThrowsDomainConflictException()
+    {
+        var order = CreateOrder();
+        var firstPayment = Payment.Create(order.Id, order.TotalAmount, FixedUtcNow);
+        var secondPayment = Payment.Create(order.Id, order.TotalAmount, FixedUtcNow);
+        order.SetPayment(firstPayment);
+
+        var exception = Assert.Throws<DomainConflictException>(
+            () => order.SetPayment(secondPayment));
+
+        Assert.Equal("invalid_order_transition", exception.Code);
+        Assert.Same(firstPayment, order.Payment);
+    }
+
+    [Fact]
+    public void SetPayment_WithNullPayment_ThrowsDomainValidationException()
+    {
+        var order = CreateOrder();
+
+        Assert.Throws<DomainValidationException>(() => order.SetPayment(null!));
     }
 
     [Fact]

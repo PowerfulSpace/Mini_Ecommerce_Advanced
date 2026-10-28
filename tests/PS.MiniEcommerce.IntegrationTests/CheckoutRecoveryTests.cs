@@ -66,6 +66,7 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         Assert.Equal(201, attempt.ResponseStatusCode);
 
         Assert.Equal(1, await GetOrdersCountAsync());
+        Assert.Equal(1, await GetPaymentsCountAsync());
         var stockAfter = await GetStockAsync(WirelessMouse);
         Assert.Equal(stockBefore.Available - 1, stockAfter.Available);
         Assert.Equal(stockBefore.Reserved + 1, stockAfter.Reserved);
@@ -125,6 +126,7 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         Assert.Null(attemptAfterFirst.OrderId);
 
         Assert.Equal(0, await GetOrdersCountAsync());
+        Assert.Equal(0, await GetPaymentsCountAsync());
         var stockAfterFirst = await GetStockAsync(WirelessMouse);
         Assert.Equal(stockBefore.Available, stockAfterFirst.Available);
         Assert.Equal(stockBefore.Reserved, stockAfterFirst.Reserved);
@@ -146,6 +148,7 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         Assert.Null(attemptAfterSecond.ResponsePayload);
 
         Assert.Equal(0, await GetOrdersCountAsync());
+        Assert.Equal(0, await GetPaymentsCountAsync());
         var stockAfterSecond = await GetStockAsync(WirelessMouse);
         Assert.Equal(stockBefore.Available, stockAfterSecond.Available);
         Assert.Equal(stockBefore.Reserved, stockAfterSecond.Reserved);
@@ -411,6 +414,12 @@ public class CheckoutRecoveryTests : IAsyncLifetime
     {
         await using var context = CreateContext();
         return await context.Orders.AsNoTracking().CountAsync();
+    }
+
+    private async Task<int> GetPaymentsCountAsync()
+    {
+        await using var context = CreateContext();
+        return await context.Payments.AsNoTracking().CountAsync();
     }
 
     private async Task<int> GetAliceCartItemCountAsync()

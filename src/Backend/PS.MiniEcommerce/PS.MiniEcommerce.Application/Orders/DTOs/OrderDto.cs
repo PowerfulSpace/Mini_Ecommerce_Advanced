@@ -1,3 +1,5 @@
+using PS.MiniEcommerce.Application.Payments.DTOs;
+
 namespace PS.MiniEcommerce.Application.Orders.DTOs;
 
 public sealed record OrderDto(
@@ -5,4 +7,6 @@ public sealed record OrderDto(
     string Status,
     DateTime CreatedAtUtc,
     decimal TotalAmount,
-    IReadOnlyList<OrderItemDto> Items);
+    Guid? PaymentId,
+    IReadOnlyList<OrderItemDto> Items,
+    PaymentDto? Payment);

@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.EntityFrameworkCore;
 using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Domain.Events;
+using PS.MiniEcommerce.Domain.Payments;
 using PS.MiniEcommerce.Infrastructure;
 using PS.MiniEcommerce.IntegrationTests.Fixtures;
 
@@ -270,7 +271,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
     {
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
         var stockAfterCheckout = await GetStockAsync(WirelessMouse);
-        await SetStatusAsync(orderId, OrderStatus.Paid, Guid.NewGuid());
+        await SetStatusAsync(orderId, OrderStatus.Paid);
 
         var response = await CancelAsync(Alice, orderId);
 
@@ -298,7 +299,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
     {
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2);
         var stockAfterCheckout = await GetStockAsync(WirelessMouse);
-        await SetStatusAsync(orderId, OrderStatus.Paid, Guid.NewGuid());
+        await SetStatusAsync(orderId, OrderStatus.Paid);
         var etag = await GetOrderETagAsync(Alice, orderId);
         var order = await GetOrderAsync(Alice, orderId);
         var item = Assert.Single(order.Items);
@@ -496,7 +497,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task PaymentId_IsNullableAndPersists()
+    public async Task PaymentId_IsSetByCheckoutAndCanBeCleared()
     {
         var orderId = await CreateOrderAsync(Alice, WirelessMouse, 1);
 
@@ -508,13 +509,20 @@ public class OrderCancelEndpointTests : IAsyncLifetime
                 .Select(order => order.PaymentId)
                 .FirstAsync();
 
-            Assert.Null(initialPaymentId);
+            Assert.NotNull(initialPaymentId);
 
-            var paymentId = Guid.NewGuid();
+            var paymentExists = await context.Payments
+                .AsNoTracking()
+                .AnyAsync(payment => payment.Id == initialPaymentId.Value);
+            Assert.True(paymentExists);
+        }
+
+        await using (var context = CreateContext())
+        {
             var affected = await context.Orders
                 .Where(order => order.Id == orderId)
                 .ExecuteUpdateAsync(
-                    setters => setters.SetProperty(order => order.PaymentId, paymentId));
+                    setters => setters.SetProperty(order => order.PaymentId, (Guid?)null));
 
             Assert.Equal(1, affected);
         }
@@ -527,8 +535,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
                 .Select(order => order.PaymentId)
                 .FirstAsync();
 
-            Assert.NotNull(storedPaymentId);
-            Assert.NotEqual(Guid.Empty, storedPaymentId.Value);
+            Assert.Null(storedPaymentId);
         }
     }
 
@@ -672,17 +679,35 @@ public class OrderCancelEndpointTests : IAsyncLifetime
             .FirstAsync();
     }
 
-    private async Task SetStatusAsync(Guid orderId, OrderStatus status, Guid? paymentId = null)
+    private async Task<Guid?> SetStatusAsync(Guid orderId, OrderStatus status)
     {
         await using var context = CreateContext();
+        var storedPaymentId = await context.Orders
+            .Where(order => order.Id == orderId)
+            .Select(order => order.PaymentId)
+            .FirstAsync();
+
+        if (storedPaymentId is null)
+        {
+            var totalAmount = await context.Orders
+                .Where(order => order.Id == orderId)
+                .Select(order => order.TotalAmount)
+                .FirstAsync();
+            var payment = Payment.Create(orderId, totalAmount, DateTime.UtcNow);
+            context.Payments.Add(payment);
+            await context.SaveChangesAsync();
+            storedPaymentId = payment.Id;
+        }
+
         var affected = await context.Orders
             .Where(order => order.Id == orderId)
             .ExecuteUpdateAsync(
                 setters => setters
                     .SetProperty(order => order.Status, status)
-                    .SetProperty(order => order.PaymentId, paymentId));
+                    .SetProperty(order => order.PaymentId, storedPaymentId));
 
         Assert.Equal(1, affected);
+        return storedPaymentId;
     }
 
     private AppDbContext CreateContext() =>

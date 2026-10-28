@@ -117,6 +117,10 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("PaymentId")
+                        .IsUnique()
+                        .HasFilter("[PaymentId] IS NOT NULL");
+
                     b.HasIndex("UserId", "CreatedAtUtc")
                         .IsDescending(false, true);
 
@@ -189,6 +193,94 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                     b.ToTable("OrderItemCancellations", null, t =>
                         {
                             t.HasCheckConstraint("CK_OrderItemCancellations_Quantity_Positive", "[Quantity] > 0");
+                        });
+                });
+
+            modelBuilder.Entity("PS.MiniEcommerce.Domain.Payments.Payment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("ConfirmedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("ProviderPaymentId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<decimal>("RefundedAmount")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime?>("RefundedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OrderId")
+                        .IsUnique();
+
+                    b.ToTable("Payments", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Payments_Amount_NonNegative", "[Amount] >= 0");
+
+                            t.HasCheckConstraint("CK_Payments_RefundedAmount_NonNegative", "[RefundedAmount] >= 0");
+
+                            t.HasCheckConstraint("CK_Payments_RefundedAmount_WithinAmount", "[RefundedAmount] <= [Amount]");
+
+                            t.HasCheckConstraint("CK_Payments_Status_Valid", "[Status] IN ('Pending', 'Confirmed', 'Failed', 'Refunded')");
+                        });
+                });
+
+            modelBuilder.Entity("PS.MiniEcommerce.Domain.Payments.Refund", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<Guid>("PaymentId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTime>("RefundedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PaymentId");
+
+                    b.ToTable("Refunds", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Refunds_Amount_Positive", "[Amount] > 0");
                         });
                 });
 
@@ -395,11 +487,18 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
 
             modelBuilder.Entity("PS.MiniEcommerce.Domain.Order", b =>
                 {
+                    b.HasOne("PS.MiniEcommerce.Domain.Payments.Payment", "Payment")
+                        .WithOne()
+                        .HasForeignKey("PS.MiniEcommerce.Domain.Order", "PaymentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("PS.MiniEcommerce.Domain.User", null)
                         .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.Navigation("Payment");
                 });
 
             modelBuilder.Entity("PS.MiniEcommerce.Domain.OrderItem", b =>
@@ -422,6 +521,24 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                     b.HasOne("PS.MiniEcommerce.Domain.OrderItem", null)
                         .WithMany("Cancellations")
                         .HasForeignKey("OrderItemId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PS.MiniEcommerce.Domain.Payments.Payment", b =>
+                {
+                    b.HasOne("PS.MiniEcommerce.Domain.Order", null)
+                        .WithMany()
+                        .HasForeignKey("OrderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("PS.MiniEcommerce.Domain.Payments.Refund", b =>
+                {
+                    b.HasOne("PS.MiniEcommerce.Domain.Payments.Payment", null)
+                        .WithMany("Refunds")
+                        .HasForeignKey("PaymentId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
@@ -461,6 +578,11 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
             modelBuilder.Entity("PS.MiniEcommerce.Domain.OrderItem", b =>
                 {
                     b.Navigation("Cancellations");
+                });
+
+            modelBuilder.Entity("PS.MiniEcommerce.Domain.Payments.Payment", b =>
+                {
+                    b.Navigation("Refunds");
                 });
 #pragma warning restore 612, 618
         }

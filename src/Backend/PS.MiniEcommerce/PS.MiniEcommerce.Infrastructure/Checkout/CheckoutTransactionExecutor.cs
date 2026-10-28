@@ -9,6 +9,7 @@ using PS.MiniEcommerce.Application.Exceptions;
 using PS.MiniEcommerce.Application.Orders.DTOs;
 using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Domain.Exceptions;
+using PS.MiniEcommerce.Domain.Payments;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 
 namespace PS.MiniEcommerce.Infrastructure.Checkout;
@@ -200,11 +201,20 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
 
         cart.RemoveSelected(utcNow);
 
-        var orderDto = order.ToDto();
-        var responsePayload = JsonSerializer.Serialize(orderDto, JsonOptions);
+        string responsePayload;
 
         try
         {
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            var payment = Payment.Create(order.Id, order.TotalAmount, utcNow);
+            _dbContext.Payments.Add(payment);
+            order.SetPaymentId(payment.Id);
+            order.SetPayment(payment);
+
+            var orderDto = order.ToDto();
+            responsePayload = JsonSerializer.Serialize(orderDto, JsonOptions);
+
             await _dbContext.SaveChangesAsync(cancellationToken);
 
             var markedCompleted = await _dbContext.CheckoutAttempts

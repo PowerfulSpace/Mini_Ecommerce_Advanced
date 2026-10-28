@@ -51,6 +51,7 @@ public class OrderRepository : IOrderRepository
         var order = await _dbContext.Orders
             .Include(order => order.Items)
             .ThenInclude(item => item.Cancellations)
+            .Include(order => order.Payment)
             .FirstOrDefaultAsync(
                 order => order.Id == orderId && order.UserId == userId,
                 cancellationToken);

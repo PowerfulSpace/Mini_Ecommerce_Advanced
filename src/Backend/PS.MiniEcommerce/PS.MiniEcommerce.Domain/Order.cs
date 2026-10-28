@@ -1,5 +1,6 @@
 using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Exceptions;
+using PS.MiniEcommerce.Domain.Payments;
 
 namespace PS.MiniEcommerce.Domain;
 
@@ -15,6 +16,8 @@ public class Order
     public OrderStatus Status { get; private set; }
 
     public Guid? PaymentId { get; private set; }
+
+    public Payment? Payment { get; private set; }
 
     public DateTime CreatedAtUtc { get; private set; }
 
@@ -73,6 +76,41 @@ public class Order
             utcNow));
 
         return order;
+    }
+
+    public void SetPaymentId(Guid paymentId)
+    {
+        if (PaymentId is not null)
+        {
+            throw new DomainConflictException(
+                "Order already has a payment.",
+                "invalid_order_transition");
+        }
+
+        PaymentId = paymentId;
+    }
+
+    public void SetPayment(Payment payment)
+    {
+        if (payment is null)
+        {
+            throw new DomainValidationException("Payment must not be null.");
+        }
+
+        if (payment.OrderId != Id)
+        {
+            throw new DomainValidationException("Payment must belong to the order.");
+        }
+
+        if (PaymentId is not null && PaymentId != payment.Id)
+        {
+            throw new DomainConflictException(
+                "Order already has a different payment.",
+                "invalid_order_transition");
+        }
+
+        Payment = payment;
+        PaymentId = payment.Id;
     }
 
     public void MarkPaid()

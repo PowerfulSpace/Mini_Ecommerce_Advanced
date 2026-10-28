@@ -2,8 +2,10 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Domain.Events;
+using PS.MiniEcommerce.Domain.Payments;
 using PS.MiniEcommerce.Infrastructure;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 using PS.MiniEcommerce.Infrastructure.Seed;
@@ -58,10 +60,28 @@ public class CheckoutEndpointTests : IAsyncLifetime
         Assert.NotNull(order);
         Assert.Equal("Created", order.Status);
         Assert.Equal(19.99m, order.TotalAmount);
+        Assert.NotNull(order.PaymentId);
+        Assert.NotNull(order.Payment);
+        Assert.Equal(order.PaymentId, order.Payment.Id);
+        Assert.Equal(order.Id, order.Payment.OrderId);
+        Assert.Equal(19.99m, order.Payment.Amount);
+        Assert.Equal(0m, order.Payment.RefundedAmount);
+        Assert.Equal("Pending", order.Payment.Status);
+        Assert.Null(order.Payment.ConfirmedAtUtc);
+        Assert.Null(order.Payment.RefundedAtUtc);
         var item = Assert.Single(order.Items);
         Assert.Equal(productId, item.ProductId);
         Assert.Equal(WirelessMouse, item.ProductName);
         Assert.Equal(19.99m, item.UnitPrice);
+
+        var storedPayment = await GetPaymentAsync(order.PaymentId.Value);
+        Assert.NotNull(storedPayment);
+        Assert.Equal(order.Id, storedPayment.OrderId);
+        Assert.Equal(19.99m, storedPayment.Amount.Amount);
+        Assert.Equal(0m, storedPayment.RefundedAmount.Amount);
+        Assert.Equal(PaymentStatus.Pending, storedPayment.Status);
+        Assert.Equal(order.PaymentId, await GetOrderPaymentIdAsync(order.Id));
+        Assert.Equal(1, await GetPaymentsCountAsync());
 
         var stock = await GetStockAsync(WirelessMouse);
         Assert.Equal(99, stock.Available);
@@ -80,6 +100,62 @@ public class CheckoutEndpointTests : IAsyncLifetime
         Assert.Equal(1, orderPlaced.ItemCount);
         Assert.True(_capture.OrderPlacedWasVisibleAfterCommit);
         Assert.DoesNotContain(_capture.Events, domainEvent => domainEvent is ProductDeactivated);
+    }
+
+    [Fact]
+    public async Task PostOrders_WhenCartValid_ResponsePayloadContainsPaymentId()
+    {
+        var productId = await GetActiveProductIdAsync(WirelessMouse);
+        var etag = await AddItemToAliceCartAsync(productId, 1);
+
+        var response = await _client.SendAsync(CreateCheckoutRequest("checkout-payload-payment-1", etag));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var order = await response.Content.ReadFromJsonAsync<OrderResponse>();
+        Assert.NotNull(order);
+        Assert.NotNull(order.PaymentId);
+
+        var attempt = await GetCheckoutAttemptAsync("checkout-payload-payment-1");
+        Assert.NotNull(attempt);
+        Assert.NotNull(attempt.ResponsePayload);
+
+        using var payload = JsonDocument.Parse(attempt.ResponsePayload);
+        var paymentId = payload.RootElement.GetProperty("paymentId").GetGuid();
+        Assert.Equal(order.PaymentId.Value, paymentId);
+
+        var payment = payload.RootElement.GetProperty("payment");
+        Assert.Equal(paymentId, payment.GetProperty("id").GetGuid());
+        Assert.Equal("Pending", payment.GetProperty("status").GetString());
+        Assert.Equal(0m, payment.GetProperty("refundedAmount").GetDecimal());
+    }
+
+    [Fact]
+    public async Task PostOrders_WhenOrderSaveFails_DoesNotCreatePayment()
+    {
+        var productId = await GetActiveProductIdAsync(WirelessMouse);
+        var etag = await AddItemToAliceCartAsync(productId, 1);
+
+        var interceptor = new FailOrderSaveInterceptor();
+        using var factory = new CustomWebApplicationFactory(
+            _fixture.ConnectionString,
+            saveChangesInterceptor: interceptor);
+        using var client = factory.CreateClient();
+
+        const string idempotencyKey = "checkout-payment-rollback-1";
+        var response = await client.SendAsync(CreateCheckoutRequest(idempotencyKey, etag));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("idempotency_in_progress", error.Code);
+
+        Assert.Equal(0, await GetOrdersCountAsync());
+        Assert.Equal(0, await GetPaymentsCountAsync());
+
+        var attempt = await GetCheckoutAttemptAsync(idempotencyKey);
+        Assert.NotNull(attempt);
+        Assert.Equal(CheckoutAttemptStatus.InProgress, attempt.Status);
+        Assert.Null(attempt.OrderId);
     }
 
     [Fact]
@@ -230,6 +306,9 @@ public class CheckoutEndpointTests : IAsyncLifetime
         var first = await _client.SendAsync(CreateCheckoutRequest("checkout-replay-1", etag));
         Assert.Equal(HttpStatusCode.Created, first.StatusCode);
         var body1 = await first.Content.ReadAsStringAsync();
+        var firstOrder = await first.Content.ReadFromJsonAsync<OrderResponse>();
+        Assert.NotNull(firstOrder);
+        Assert.NotNull(firstOrder.PaymentId);
 
         var second = await _client.SendAsync(CreateCheckoutRequest("checkout-replay-1", etag));
 
@@ -240,7 +319,11 @@ public class CheckoutEndpointTests : IAsyncLifetime
         Assert.NotNull(second.Headers.ETag);
         Assert.Equal(first.Headers.ETag, second.Headers.ETag);
 
+        var secondOrder = await second.Content.ReadFromJsonAsync<OrderResponse>();
+        Assert.NotNull(secondOrder);
+        Assert.Equal(firstOrder.PaymentId, secondOrder.PaymentId);
         Assert.Equal(1, await GetOrdersCountAsync());
+        Assert.Equal(1, await GetPaymentsCountAsync());
     }
 
     [Fact]
@@ -725,6 +808,30 @@ public class CheckoutEndpointTests : IAsyncLifetime
         return await context.Orders.AsNoTracking().CountAsync();
     }
 
+    private async Task<int> GetPaymentsCountAsync()
+    {
+        await using var context = CreateContext();
+        return await context.Payments.AsNoTracking().CountAsync();
+    }
+
+    private async Task<Payment?> GetPaymentAsync(Guid paymentId)
+    {
+        await using var context = CreateContext();
+        return await context.Payments
+            .AsNoTracking()
+            .FirstOrDefaultAsync(payment => payment.Id == paymentId);
+    }
+
+    private async Task<Guid?> GetOrderPaymentIdAsync(Guid orderId)
+    {
+        await using var context = CreateContext();
+        return await context.Orders
+            .AsNoTracking()
+            .Where(order => order.Id == orderId)
+            .Select(order => order.PaymentId)
+            .FirstAsync();
+    }
+
     private async Task<int> GetAliceCartItemCountAsync()
     {
         await using var context = CreateContext();
@@ -763,13 +870,50 @@ public class CheckoutEndpointTests : IAsyncLifetime
             .UseSqlServer(_fixture.ConnectionString)
             .Options);
 
+    private sealed class FailOrderSaveInterceptor : SaveChangesInterceptor
+    {
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            var hasNewOrder = eventData.Context?.ChangeTracker
+                .Entries<Order>()
+                .Any(entry => entry.State == EntityState.Added) == true;
+
+            if (hasNewOrder)
+            {
+                throw new DbUpdateException("Simulated failure while saving the order.");
+            }
+
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
+        }
+    }
+
     private sealed record ProductSnapshot(Guid Id, string Name, Money Price, int Available, int Reserved);
 
     private sealed record StockSnapshot(int Available, int Reserved);
 
     private sealed record CartItemSnapshot(Guid ProductId, int Quantity, bool IsSelected);
 
-    private sealed record OrderResponse(Guid Id, string Status, DateTime CreatedAtUtc, decimal TotalAmount, List<OrderItemResponse> Items);
+    private sealed record OrderResponse(
+        Guid Id,
+        string Status,
+        DateTime CreatedAtUtc,
+        decimal TotalAmount,
+        Guid? PaymentId,
+        List<OrderItemResponse> Items,
+        PaymentResponse? Payment);
+
+    private sealed record PaymentResponse(
+        Guid Id,
+        Guid OrderId,
+        decimal Amount,
+        decimal RefundedAmount,
+        string Status,
+        DateTime CreatedAtUtc,
+        DateTime? ConfirmedAtUtc,
+        DateTime? RefundedAtUtc);
 
     private sealed record OrderItemResponse(Guid ProductId, string ProductName, decimal UnitPrice, int Quantity, decimal LineTotal);
 

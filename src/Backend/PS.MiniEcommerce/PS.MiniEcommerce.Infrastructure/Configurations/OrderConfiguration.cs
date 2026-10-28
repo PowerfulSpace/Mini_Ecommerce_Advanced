@@ -62,5 +62,10 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
             .WithMany()
             .HasForeignKey(order => order.UserId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(order => order.Payment)
+            .WithOne()
+            .HasForeignKey<Order>(order => order.PaymentId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }

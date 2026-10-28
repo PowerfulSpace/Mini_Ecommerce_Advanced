@@ -1,3 +1,4 @@
+using PS.MiniEcommerce.Application.Payments.DTOs;
 using PS.MiniEcommerce.Domain;
 
 namespace PS.MiniEcommerce.Application.Orders.DTOs;
@@ -9,6 +10,7 @@ public static class OrderDtoMapping
         order.Status.ToString(),
         order.CreatedAtUtc,
         order.TotalAmount.Amount,
+        order.PaymentId,
         order.Items
             .Select(item => new OrderItemDto(
                 item.Id,
@@ -18,11 +20,13 @@ public static class OrderDtoMapping
                 item.Quantity,
                 item.CancelledQuantity,
                 (item.UnitPrice * item.Quantity).Amount))
-            .ToList());
+            .ToList(),
+        order.Payment?.ToDto());
 
     public static OrderSummaryDto ToSummaryDto(this Order order) => new(
         order.Id,
         order.Status.ToString(),
         order.CreatedAtUtc,
-        order.TotalAmount.Amount);
+        order.TotalAmount.Amount,
+        order.PaymentId);
 }

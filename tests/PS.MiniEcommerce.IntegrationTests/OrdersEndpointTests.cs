@@ -62,7 +62,11 @@ public class OrdersEndpointTests : IAsyncLifetime
         Assert.Equal(1, document.RootElement.GetProperty("totalCount").GetInt32());
 
         var propertyNames = items[0].EnumerateObject().Select(p => p.Name).OrderBy(name => name).ToArray();
-        Assert.Equal(new[] { "createdAtUtc", "id", "status", "totalAmount" }, propertyNames);
+        Assert.Equal(new[] { "createdAtUtc", "id", "paymentId", "status", "totalAmount" }, propertyNames);
+
+        var paymentId = items[0].GetProperty("paymentId");
+        Assert.Equal(JsonValueKind.String, paymentId.ValueKind);
+        Assert.NotEqual(Guid.Empty, paymentId.GetGuid());
     }
 
     [Fact]
@@ -145,6 +149,15 @@ public class OrdersEndpointTests : IAsyncLifetime
         Assert.NotNull(order);
         Assert.Equal(orderId, order.Id);
         Assert.Equal("Created", order.Status);
+        Assert.NotNull(order.PaymentId);
+        Assert.NotNull(order.Payment);
+        Assert.Equal(order.PaymentId, order.Payment.Id);
+        Assert.Equal(order.Id, order.Payment.OrderId);
+        Assert.Equal(order.TotalAmount, order.Payment.Amount);
+        Assert.Equal(0m, order.Payment.RefundedAmount);
+        Assert.Equal("Pending", order.Payment.Status);
+        Assert.Null(order.Payment.ConfirmedAtUtc);
+        Assert.Null(order.Payment.RefundedAtUtc);
 
         var repeated = await GetOrderByIdAsync(Alice, orderId);
         Assert.Equal(HttpStatusCode.OK, repeated.StatusCode);
@@ -253,9 +266,31 @@ public class OrdersEndpointTests : IAsyncLifetime
 
     private sealed record OrdersPageResponse(List<OrderSummaryResponse> Items, int Page, int PageSize, int TotalCount);
 
-    private sealed record OrderSummaryResponse(Guid Id, string Status, DateTime CreatedAtUtc, decimal TotalAmount);
+    private sealed record OrderSummaryResponse(
+        Guid Id,
+        string Status,
+        DateTime CreatedAtUtc,
+        decimal TotalAmount,
+        Guid? PaymentId);
 
-    private sealed record OrderDetailResponse(Guid Id, string Status, DateTime CreatedAtUtc, decimal TotalAmount, List<OrderItemResponse> Items);
+    private sealed record OrderDetailResponse(
+        Guid Id,
+        string Status,
+        DateTime CreatedAtUtc,
+        decimal TotalAmount,
+        Guid? PaymentId,
+        List<OrderItemResponse> Items,
+        PaymentResponse? Payment);
+
+    private sealed record PaymentResponse(
+        Guid Id,
+        Guid OrderId,
+        decimal Amount,
+        decimal RefundedAmount,
+        string Status,
+        DateTime CreatedAtUtc,
+        DateTime? ConfirmedAtUtc,
+        DateTime? RefundedAtUtc);
 
     private sealed record OrderItemResponse(Guid OrderItemId, Guid ProductId, string ProductName, decimal UnitPrice, int Quantity, int CancelledQuantity, decimal LineTotal);
 
