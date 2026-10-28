@@ -817,13 +817,10 @@ refund повторно; проигравшие попытки получают 
    конвертер lowercase.
 7. `AddProductRowVersion` (этап 18) — добавляет `Products.RowVersion`
    (`rowversion NOT NULL`, shadow property).
-
-Будущие миграции (в порядке применения):
-
 8. `AddPaymentsAndRefunds` (этап 19) — создаёт `Payment` и `Refund`; добавляет FK
    `Order.PaymentId → Payment`. Выполняется после
    `AddOrderStatusesAndPaymentId`.
-9. `AddPaymentAttempts` — создаёт `PaymentAttempt`; выполняется после
+9. `AddPaymentAttempts` (этап 19) — создаёт `PaymentAttempt`; выполняется после
    `AddPaymentsAndRefunds`.
 
 Порядок миграций должен соответствовать зависимостям внешних ключей. FK

@@ -274,3 +274,9 @@ Fingerprint не включает `Idempotency-Key`: ключ уже являе�
   - запрет refund после полного возврата и refund больше суммы;
   - retry `Failed → Pending → Confirmed`;
   - отсутствие `PendingPayment` в `OrderStatus`.
+
+## Amendments
+
+- Refund на этапе 19 выполняется in-process через `IPaymentRefundService`;
+  `IPaymentProvider.RefundAsync` не вызывается (для будущего реального
+  провайдера).

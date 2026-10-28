@@ -170,8 +170,9 @@ Checkout создаёт `Payment` в состоянии `Pending` в той же
 
 Правила:
 
-- mock-провайдер выполняет `Confirmed → Refunded` при полном возврате;
-- при частичном возврате `Payment` остаётся `Confirmed`;
+- refund выполняется in-process через `IPaymentRefundService` (домен
+  `Payment`/`Refund`); `IPaymentProvider.RefundAsync` не используется;
+- `Payment.Status = Refunded` при полном возврате, `Confirmed` при частичном;
 - для каждой операции создаётся `Refund`;
 - `Payment.RefundedAmount` увеличивается на `amount`;
 - `Payment.RefundedAtUtc` устанавливается только при полном возврате;
@@ -215,7 +216,8 @@ Mock:
 - создаёт `Pending`-платёж;
 - подтверждает `Pending → Confirmed`;
 - возвращает `Failed` при настроенном сценарии неудачи;
-- выполняет refund и сообщает результат;
+- реализует `RefundAsync` для будущего реального провайдера; в текущем сценарии
+  refund выполняется in-process и не вызывает его;
 - не обращается к внешней сети.
 
 Реальный провайдер, Stripe, вебхуки, reconciliation и хранение платёжных

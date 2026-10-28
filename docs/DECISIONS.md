@@ -23,9 +23,14 @@
   этапа 12).
 - Жизненный цикл заказа — явная state machine из шести статусов; см.
   [ADR-004](adr/ADR-004-order-state-machine.md).
-- `Order.PaymentId` введён на этапе 13 как nullable `uniqueidentifier` без FK;
-  FK на `Payment` добавляется на этапе 19. См.
+- `Order.PaymentId` — nullable `uniqueidentifier` с FK на `Payment`; введён на
+  этапе 13, FK добавлен миграцией `AddPaymentsAndRefunds` на этапе 19. См.
   [data-model.md](architecture/data-model.md) §4.5, §11.
+- `Payment` и `Refund` — доменные сущности, `PaymentAttempt` — инфраструктурная
+  сущность идемпотентности; `IPaymentProvider` (mock) определён в Application и
+  реализован в Infrastructure. См.
+  [ADR-008](adr/ADR-008-payments-and-idempotency.md),
+  [data-model.md](architecture/data-model.md) §4.8–4.10.
 - Запас хранится как `Available` + `Reserved`; см.
   [ADR-005](adr/ADR-005-stock-reservations.md).
 - Частичный checkout и частичная отмена определены в
@@ -555,6 +560,9 @@ MVP+ не включает:
   [ADR-008](adr/ADR-008-payments-and-idempotency.md).
 - Refund поддерживается, включая несколько частичных refund через таблицу
   `Refund`. См. [ADR-008](adr/ADR-008-payments-and-idempotency.md).
+- Refund выполняется in-process через `IPaymentRefundService` (домен
+  `Payment`/`Refund`); `IPaymentProvider.RefundAsync` в текущем сценарии не
+  вызывается. См. `payments.md` §5, `api.md` §3.5.
 - Аудит работает at-most-once: при сбое handler'а audit-запись теряется; outbox
   и retry отсутствуют.
 - TTL, cleanup и фоновое освобождение резервов отсутствуют; `Created` может
@@ -562,16 +570,25 @@ MVP+ не включает:
 - `PaymentAttempt` и `CheckoutAttempt` не очищаются автоматически.
 - Уведомления, промо, скидки, купоны и налоги не реализованы.
 - Частичный возврат после доставки не поддерживается.
-- Replay checkout и ETag заказа: повтор checkout (replay) возвращает текущий
-  `Order.RowVersion` для попыток с `OrderId`, а не ETag из сохранённого
-  `ResponsePayload`; для попыток без `OrderId` (созданных до этапа 15) ETag не
-  возвращается. Причина: `CheckoutAttempt.ResponsePayload` не сохранял ETag
-  заказа до этапа 15. Исправление (сохранение ETag в payload) — вне MVP+ или
-  отдельный этап.
-- `ConsumeReservedAsync` и `CancelledQuantity`: на этапе 19 confirm должен
-  учитывать `Quantity - CancelledQuantity` для каждой позиции; текущий
-  `ConsumeReservedAsync` читает `OrderItem.Quantity` без учёта
-  `OrderItemCancellation`. Контракт метода будет уточнён на этапе 19.
+- Replay checkout: повторный checkout возвращает сохранённый `ResponsePayload`
+  (для попыток, созданных начиная с этапа 19, он содержит `paymentId` и
+  `Payment` в `Pending`) и текущий `Order.RowVersion` в ETag, а не ETag из
+  сохранённого payload. Для попыток без `OrderId` (созданных до этапа 15) ETag
+  не возвращается. Причина: `CheckoutAttempt.ResponsePayload` не сохранял ETag
+  заказа. Исправление (сохранение ETag в payload) — вне MVP+ или отдельный этап.
+- `ConsumeReservedAsync` учитывает `Quantity - CancelledQuantity` для каждой
+  позиции, поэтому confirm не списывает уже отменённый запас.
+- `PaymentAttempt` использует lease 30 секунд, bounded wait 3 секунды и polling
+  каждые 100 мс; просроченный lease может быть перехвачен повторным запросом с
+  тем же ключом.
+- Порядок блокировок в confirm, cancel и return — `Order`, затем `Payment`;
+  admin refund блокирует только `Payment`. Единый порядок предотвращает
+  взаимные блокировки.
+- `refund_not_allowed` (`409`) возвращается для refund при `Pending`, `Failed`
+  или `Refunded`, а также при превышении остатка.
+- DTO заказа (`GET /api/orders`, `GET /api/orders/{id}` и checkout `201`)
+  включает `paymentId` и `payment`; `paymentId` равен `null` для заказов,
+  созданных до этапа 19.
 - `OrderItemCancellation.Reason`: `Reason` не передаётся через API (body
   `api.md` его не описывает); поле nullable и заполняется `null` из API.
   Внутренние сценарии могут заполнять позже.
@@ -584,15 +601,19 @@ MVP+ не включает:
 - `If-Match` не требуется для admin ship/deliver/return; защита — `UPDLOCK` +
   условный переход статуса. `If-Match` — только для
   `POST /api/orders/{id}/cancel`.
-- На этапе 18 Return не выполняет refund и не возвращает `refund_not_allowed`;
-  refund при `Delivered → Returned` — этап 19. `Payment.Status` при return не
-  проверяется.
+- Refund выполняется в `CancelAsync`/`ReturnAsync` в той же транзакции, что и
+  переход заказа и восстановление запаса; при ошибке refund заказ и запас
+  откатываются.
 - `DOMAIN.md` §13 упоминает `admin_forbidden`; источники истины (`api.md` §4.1,
   `SPEC.md`, `ADR-009`) используют `forbidden`. Реализовано `forbidden`;
   `DOMAIN.md` не синхронизирован.
 - `Product.Deactivate` поднимает `ProductDeactivated` только при фактическом
   изменении (`IsActive` true → false); повторная деактивация — no-op, без
   события и audit.
+- Статус проекта в документации синхронизирован: MVP+ (M1–M8, M12, M13)
+  реализован; README.md, PROJECT.md §1, ROADMAP.md §20, FRONTEND.md §1,
+  architecture.md §13 обновлены. AGENTS.md, PROJECT.md, NEXT_STEPS.md — статус
+  проекта синхронизирован с фактом (MVP+ реализован).
 
 Примечание: путь «недостижимого» конфликта D2 теперь возвращает временный
 `503 checkout_retry` (попытка остаётся `InProgress`), а не `500`.

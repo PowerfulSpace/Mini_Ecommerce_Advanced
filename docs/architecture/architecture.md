@@ -761,9 +761,9 @@ SQL Server, rowversion, изоляции или поведения затрон�
 
 ## 13. Ограничения текущего этапа
 
-MVP+ (M1–M14) — целевая reference implementation; в работе. Документация MVP+
-завершена; код реализуется по этапам 12–19; текущий код — MVP. См.
-`../../RATIONALE.md`, `../ROADMAP.md`. MVP+ не содержит production-hardening:
+MVP+ (M1–M8, M12, M13) реализован; код соответствует MVP+. M9, M10, M11, M14 —
+вне объёма. См. `../../RATIONALE.md`, `../ROADMAP.md`. MVP+ не содержит
+production-hardening:
 
 - Платёжный провайдер — mock; Stripe, реальные вебхуки и reconciliation не
   поддерживаются.

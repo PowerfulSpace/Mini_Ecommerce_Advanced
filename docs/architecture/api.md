@@ -756,8 +756,10 @@ Idempotency-Key: <client-generated key>
 - `amount` должен быть положительным `decimal` и не превышать
   `Payment.Amount - Payment.RefundedAmount`.
 - `reason` необязателен.
-- Mock-провайдер выполняет `Confirmed → Refunded` при полном возврате или
-  оставляет `Confirmed` при частичном.
+- Возврат выполняется in-process через `IPaymentRefundService` (домен
+  `Payment`/`Refund`); `IPaymentProvider.RefundAsync` в текущем сценарии не
+  вызывается (оставлен для будущего реального провайдера).
+- `Payment.Status = Refunded` при полном возврате, `Confirmed` при частичном.
 - Для каждой операции создаётся запись `Refund`; `Payment.RefundedAmount`
   увеличивается на `amount`. `RefundedAtUtc` устанавливается только при полном
   возврате.
