@@ -1,3 +1,4 @@
+using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Exceptions;
 
 namespace PS.MiniEcommerce.Domain;
@@ -94,7 +95,18 @@ public class Product
 
     public void Deactivate()
     {
+        Deactivate(DateTime.UtcNow);
+    }
+
+    public void Deactivate(DateTime utcNow)
+    {
+        if (!IsActive)
+        {
+            return;
+        }
+
         IsActive = false;
+        _domainEvents.Add(new ProductDeactivated(Id, utcNow));
     }
 
     public void Reserve(int quantity)
@@ -148,13 +160,24 @@ public class Product
 
     public void AdjustAvailable(int newAvailable)
     {
+        AdjustAvailable(newAvailable, DateTime.UtcNow);
+    }
+
+    public void AdjustAvailable(int newAvailable, DateTime utcNow)
+    {
         if (newAvailable < 0)
         {
             throw new DomainValidationException("Available quantity must not be negative.");
         }
 
+        if (Available == newAvailable)
+        {
+            return;
+        }
+
         Available = newAvailable;
         EnsureStockInvariants();
+        _domainEvents.Add(new StockAdjusted(Id, newAvailable, utcNow));
     }
 
     public void ClearDomainEvents()

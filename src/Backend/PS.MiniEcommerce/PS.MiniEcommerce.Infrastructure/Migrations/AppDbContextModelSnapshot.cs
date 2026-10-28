@@ -222,6 +222,12 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                     b.Property<int>("Reserved")
                         .HasColumnType("int");
 
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
                     b.HasKey("Id");
 
                     b.ToTable("Products", null, t =>
@@ -247,12 +253,22 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                         .HasMaxLength(320)
                         .HasColumnType("nvarchar(320)");
 
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValueSql("'customer'");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Email")
                         .IsUnique();
 
-                    b.ToTable("Users", (string)null);
+                    b.ToTable("Users", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_Users_Role_Valid", "[Role] IN ('customer', 'admin')");
+                        });
                 });
 
             modelBuilder.Entity("PS.MiniEcommerce.Infrastructure.Persistence.AuditLog", b =>

@@ -8,12 +8,19 @@ public static class SeedData
 
     public const string BobEmail = "bob@example.com";
 
+    public const string AdminEmail = "admin@example.com";
+
     public static readonly DateTime SeedTimestampUtc = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
-    public static IReadOnlyList<string> GetUserEmails() => new[]
+    public static IReadOnlyList<string> GetUserEmails() => GetUsers()
+        .Select(user => user.Email)
+        .ToList();
+
+    public static IReadOnlyList<UserSeed> GetUsers() => new[]
     {
-        AliceEmail,
-        BobEmail
+        new UserSeed(AliceEmail, UserRole.Customer),
+        new UserSeed(BobEmail, UserRole.Customer),
+        new UserSeed(AdminEmail, UserRole.Admin)
     };
 
     public static IReadOnlyList<ProductSeed> GetProducts() => new[]
@@ -74,5 +81,7 @@ public static class SeedData
             true)
     };
 }
+
+public sealed record UserSeed(string Email, UserRole Role);
 
 public sealed record ProductSeed(string Name, string Description, Money Price, int Available, bool IsActive);

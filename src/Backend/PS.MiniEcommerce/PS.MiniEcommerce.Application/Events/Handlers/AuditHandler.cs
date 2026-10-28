@@ -2,6 +2,7 @@ using System.Text.Json;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using PS.MiniEcommerce.Application.Abstractions.CurrentUser;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Domain.Events;
 
@@ -37,6 +38,12 @@ public sealed class AuditHandler : INotificationHandler<DomainEventNotification<
         {
             OrderPlaced orderPlaced => CreateOrderPlacedEntry(orderPlaced),
             OrderCancelled orderCancelled => CreateOrderCancelledEntry(orderCancelled),
+            ProductDeactivated productDeactivated => CreateProductDeactivatedEntry(
+                productDeactivated,
+                GetActorUserId()),
+            StockAdjusted stockAdjusted => CreateStockAdjustedEntry(
+                stockAdjusted,
+                GetActorUserId()),
             _ => null
         };
 
@@ -96,5 +103,55 @@ public sealed class AuditHandler : INotificationHandler<DomainEventNotification<
             payload,
             orderCancelled.OccurredAtUtc,
             CorrelationId: null);
+    }
+
+    private static AuditLogEntry CreateProductDeactivatedEntry(
+        ProductDeactivated productDeactivated,
+        Guid? actorUserId)
+    {
+        return new AuditLogEntry(
+            actorUserId,
+            "ProductDeactivated",
+            "Product",
+            productDeactivated.ProductId,
+            Payload: null,
+            productDeactivated.OccurredAtUtc,
+            CorrelationId: null);
+    }
+
+    private static AuditLogEntry CreateStockAdjustedEntry(
+        StockAdjusted stockAdjusted,
+        Guid? actorUserId)
+    {
+        var payload = JsonSerializer.Serialize(
+            new
+            {
+                newAvailable = stockAdjusted.NewAvailable
+            },
+            JsonOptions);
+
+        return new AuditLogEntry(
+            actorUserId,
+            "StockAdjusted",
+            "Product",
+            stockAdjusted.ProductId,
+            payload,
+            stockAdjusted.OccurredAtUtc,
+            CorrelationId: null);
+    }
+
+    private Guid? GetActorUserId()
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var currentUser = scope.ServiceProvider.GetService<ICurrentUser>();
+
+        try
+        {
+            return currentUser?.UserId;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
     }
 }

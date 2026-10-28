@@ -25,14 +25,14 @@ public class DataSeeder
             .Select(user => user.Email)
             .ToListAsync(cancellationToken);
 
-        foreach (var email in SeedData.GetUserEmails())
+        foreach (var seed in SeedData.GetUsers())
         {
-            if (existingEmails.Contains(email))
+            if (existingEmails.Contains(seed.Email))
             {
                 continue;
             }
 
-            _dbContext.Users.Add(User.Create(email, SeedData.SeedTimestampUtc));
+            _dbContext.Users.Add(User.Create(seed.Email, seed.Role, SeedData.SeedTimestampUtc));
         }
     }
 
@@ -59,7 +59,8 @@ public class DataSeeder
 
             if (!seed.IsActive)
             {
-                product.Deactivate();
+                product.Deactivate(SeedData.SeedTimestampUtc);
+                product.ClearDomainEvents();
             }
 
             _dbContext.Products.Add(product);

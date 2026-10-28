@@ -46,6 +46,10 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(product => product.CreatedAtUtc)
             .IsRequired();
 
+        builder.Property<byte[]>("RowVersion")
+            .IsRowVersion()
+            .IsRequired();
+
         builder.Ignore(product => product.DomainEvents);
     }
 }

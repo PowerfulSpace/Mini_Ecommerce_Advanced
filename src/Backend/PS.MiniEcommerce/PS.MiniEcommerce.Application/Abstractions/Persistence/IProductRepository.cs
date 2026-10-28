@@ -14,4 +14,17 @@ public interface IProductRepository
     Task<IReadOnlyList<Product>> GetByIdsAsync(
         IReadOnlyCollection<Guid> productIds,
         CancellationToken cancellationToken);
+
+    Task<Product?> GetByIdAsync(Guid productId, CancellationToken cancellationToken);
+
+    Task<(Product? Product, IReadOnlyList<object> DomainEvents)> DeactivateAsync(
+        Guid productId,
+        DateTime utcNow,
+        CancellationToken cancellationToken);
+
+    Task<(AdminStockUpdateResult Result, Product? Product, IReadOnlyList<object> DomainEvents)> AdjustAvailableAsync(
+        Guid productId,
+        int available,
+        DateTime utcNow,
+        CancellationToken cancellationToken);
 }

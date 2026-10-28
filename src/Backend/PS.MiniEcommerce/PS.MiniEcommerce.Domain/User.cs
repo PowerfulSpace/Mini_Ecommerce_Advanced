@@ -10,16 +10,24 @@ public class User
 
     public string Email { get; private set; }
 
+    public UserRole Role { get; private set; }
+
     public DateTime CreatedAtUtc { get; private set; }
 
-    private User(Guid id, string email, DateTime createdAtUtc)
+    private User(Guid id, string email, UserRole role, DateTime createdAtUtc)
     {
         Id = id;
         Email = email;
+        Role = role;
         CreatedAtUtc = createdAtUtc;
     }
 
-    public static User Create(string email, DateTime utcNow)
+    public static User Create(string email, DateTime utcNow, UserRole role = UserRole.Customer)
+    {
+        return Create(email, role, utcNow);
+    }
+
+    public static User Create(string email, UserRole role, DateTime utcNow)
     {
         if (string.IsNullOrWhiteSpace(email))
         {
@@ -38,6 +46,11 @@ public class User
             throw new DomainValidationException("Email must be a valid email address.");
         }
 
-        return new User(Guid.NewGuid(), normalizedEmail, utcNow);
+        if (!Enum.IsDefined(typeof(UserRole), role))
+        {
+            throw new DomainValidationException("Role must be either customer or admin.");
+        }
+
+        return new User(Guid.NewGuid(), normalizedEmail, role, utcNow);
     }
 }

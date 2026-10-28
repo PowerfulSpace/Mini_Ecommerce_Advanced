@@ -367,7 +367,7 @@ public class CheckoutEndpointTests : IAsyncLifetime
         var second = products[1];
 
         var etag = await AddItemToAliceCartAsync(first.Id, 1);
-        etag = await AddItemToAliceCartAsync(second.Id, 2);
+        etag = await AddItemToAliceCartAsync(second.Id, 1);
         etag = await PutSelectionAsync(
             Alice,
             etag,

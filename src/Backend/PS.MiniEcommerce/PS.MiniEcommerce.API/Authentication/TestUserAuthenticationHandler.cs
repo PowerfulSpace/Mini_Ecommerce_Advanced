@@ -15,7 +15,8 @@ public class TestUserAuthenticationHandler : AuthenticationHandler<Authenticatio
     private static readonly Dictionary<string, string> UserEmailsByKey = new(StringComparer.OrdinalIgnoreCase)
     {
         ["alice"] = "alice@example.com",
-        ["bob"] = "bob@example.com"
+        ["bob"] = "bob@example.com",
+        ["admin"] = "admin@example.com"
     };
 
     private readonly AppDbContext _dbContext;
@@ -43,20 +44,21 @@ public class TestUserAuthenticationHandler : AuthenticationHandler<Authenticatio
             return AuthenticateResult.Fail($"Unknown test user '{key}'.");
         }
 
-        var userId = await _dbContext.Users
+        var user = await _dbContext.Users
             .Where(user => user.Email == email)
-            .Select(user => (Guid?)user.Id)
+            .Select(user => new { user.Id, user.Role })
             .FirstOrDefaultAsync();
 
-        if (userId is null)
+        if (user is null)
         {
             return AuthenticateResult.Fail($"Seeded test user '{key}' not found.");
         }
 
         var claims = new[]
         {
-            new Claim(ClaimTypes.NameIdentifier, userId.Value.ToString()),
-            new Claim("sub", userId.Value.ToString())
+            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+            new Claim("sub", user.Id.ToString()),
+            new Claim(ClaimTypes.Role, user.Role.ToString().ToLowerInvariant())
         };
 
         var identity = new ClaimsIdentity(claims, SchemeName);

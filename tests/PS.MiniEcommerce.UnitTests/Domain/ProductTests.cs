@@ -1,4 +1,5 @@
 using PS.MiniEcommerce.Domain;
+using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Exceptions;
 
 namespace PS.MiniEcommerce.UnitTests.Domain;
@@ -121,24 +122,28 @@ public class ProductTests
     }
 
     [Fact]
-    public void Deactivate_SetsIsActiveFalse()
+    public void Deactivate_SetsIsActiveFalseAndRaisesProductDeactivated()
     {
         var product = CreateValidProduct();
 
-        product.Deactivate();
+        product.Deactivate(FixedUtcNow);
 
         Assert.False(product.IsActive);
+        var domainEvent = Assert.Single(product.DomainEvents.OfType<ProductDeactivated>());
+        Assert.Equal(product.Id, domainEvent.ProductId);
+        Assert.Equal(FixedUtcNow, domainEvent.OccurredAtUtc);
     }
 
     [Fact]
-    public void Deactivate_WhenAlreadyInactive_DoesNotThrow()
+    public void Deactivate_WhenAlreadyInactive_DoesNotRaiseAnotherEvent()
     {
         var product = CreateValidProduct();
 
-        product.Deactivate();
-        product.Deactivate();
+        product.Deactivate(FixedUtcNow);
+        product.Deactivate(FixedUtcNow.AddMinutes(1));
 
         Assert.False(product.IsActive);
+        Assert.Single(product.DomainEvents.OfType<ProductDeactivated>());
     }
 
     [Fact]
@@ -304,21 +309,24 @@ public class ProductTests
     }
 
     [Fact]
-    public void Deactivate_DoesNotRaiseDomainEvents()
+    public void AdjustAvailable_WithChangedValue_RaisesStockAdjusted()
     {
-        var product = CreateValidProduct();
+        var product = CreateValidProduct(available: 10, reserved: 4);
 
-        product.Deactivate();
+        product.AdjustAvailable(5, FixedUtcNow);
 
-        Assert.Empty(product.DomainEvents);
+        var domainEvent = Assert.Single(product.DomainEvents.OfType<StockAdjusted>());
+        Assert.Equal(product.Id, domainEvent.ProductId);
+        Assert.Equal(5, domainEvent.NewAvailable);
+        Assert.Equal(FixedUtcNow, domainEvent.OccurredAtUtc);
     }
 
     [Fact]
-    public void AdjustAvailable_DoesNotRaiseDomainEvents()
+    public void AdjustAvailable_WithSameValue_DoesNotRaiseEvent()
     {
-        var product = CreateValidProduct();
+        var product = CreateValidProduct(available: 10);
 
-        product.AdjustAvailable(5);
+        product.AdjustAvailable(10, FixedUtcNow);
 
         Assert.Empty(product.DomainEvents);
     }

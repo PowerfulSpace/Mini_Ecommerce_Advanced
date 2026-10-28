@@ -14,7 +14,23 @@ public class UserTests
 
         Assert.NotEqual(Guid.Empty, user.Id);
         Assert.Equal("alice@example.com", user.Email);
+        Assert.Equal(UserRole.Customer, user.Role);
         Assert.Equal(FixedUtcNow, user.CreatedAtUtc);
+    }
+
+    [Fact]
+    public void Create_WithAdminRole_SetsAdminRole()
+    {
+        var user = User.Create("admin@example.com", UserRole.Admin, FixedUtcNow);
+
+        Assert.Equal(UserRole.Admin, user.Role);
+    }
+
+    [Fact]
+    public void Create_WithInvalidRole_ThrowsDomainValidationException()
+    {
+        Assert.Throws<DomainValidationException>(
+            () => User.Create("alice@example.com", (UserRole)99, FixedUtcNow));
     }
 
     [Fact]

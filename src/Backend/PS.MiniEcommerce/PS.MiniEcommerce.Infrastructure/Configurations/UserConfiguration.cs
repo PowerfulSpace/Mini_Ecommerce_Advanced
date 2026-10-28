@@ -8,7 +8,10 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
 {
     public void Configure(EntityTypeBuilder<User> builder)
     {
-        builder.ToTable("Users");
+        builder.ToTable("Users", table =>
+        {
+            table.HasCheckConstraint("CK_Users_Role_Valid", "[Role] IN ('customer', 'admin')");
+        });
 
         builder.HasKey(user => user.Id);
 
@@ -18,6 +21,14 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(user => user.Email)
             .IsRequired()
             .HasMaxLength(320);
+
+        builder.Property(user => user.Role)
+            .IsRequired()
+            .HasConversion(
+                role => role.ToString().ToLowerInvariant(),
+                value => Enum.Parse<UserRole>(value, ignoreCase: true))
+            .HasMaxLength(20)
+            .HasDefaultValueSql("'customer'");
 
         builder.Property(user => user.CreatedAtUtc)
             .IsRequired();

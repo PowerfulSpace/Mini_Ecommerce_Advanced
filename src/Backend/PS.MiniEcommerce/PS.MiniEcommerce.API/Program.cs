@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using PS.MiniEcommerce.API.Authentication;
 using PS.MiniEcommerce.API.ExceptionHandling;
+using PS.MiniEcommerce.API.Filters;
 using PS.MiniEcommerce.Application;
 using PS.MiniEcommerce.Application.Abstractions.CurrentUser;
 using PS.MiniEcommerce.Infrastructure;
@@ -50,6 +51,8 @@ builder.Services.AddAuthorization();
 
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, ProblemDetailsAuthorizationResultHandler>();
 
+builder.Services.AddScoped<DevelopmentOnlyFilter>();
+
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUser, CurrentUser>();
 
@@ -77,6 +80,20 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseExceptionHandler();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.Use(async (context, next) =>
+    {
+        if (context.Request.Path.StartsWithSegments("/api/admin"))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        await next();
+    });
+}
 
 app.UseCors("Frontend");
 
