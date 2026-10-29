@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using PS.MiniEcommerce.Application.Abstractions.Outbox;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Orders;
 using PS.MiniEcommerce.Application.Payments;
@@ -22,15 +23,18 @@ public class OrderRepository : IOrderRepository
     private readonly AppDbContext _dbContext;
     private readonly IPaymentRepository _paymentRepository;
     private readonly IPaymentRefundService _paymentRefundService;
+    private readonly IOutboxRepository _outboxRepository;
 
     public OrderRepository(
         AppDbContext dbContext,
         IPaymentRepository paymentRepository,
-        IPaymentRefundService paymentRefundService)
+        IPaymentRefundService paymentRefundService,
+        IOutboxRepository outboxRepository)
     {
         _dbContext = dbContext;
         _paymentRepository = paymentRepository;
         _paymentRefundService = paymentRefundService;
+        _outboxRepository = outboxRepository;
     }
 
     public async Task<(IReadOnlyList<Order> Items, int TotalCount)> GetPagedByUserIdAsync(
@@ -209,6 +213,17 @@ public class OrderRepository : IOrderRepository
                 "conflict");
         }
 
+        var domainEvents = order.DomainEvents.ToList();
+        if (paymentRefunded is not null)
+        {
+            domainEvents.Add(paymentRefunded);
+        }
+
+        foreach (var domainEvent in domainEvents)
+        {
+            await _outboxRepository.AddAsync(domainEvent, utcNow, cancellationToken);
+        }
+
         _dbContext.Entry(order).Property(entry => entry.Status).IsModified = true;
 
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -220,12 +235,6 @@ public class OrderRepository : IOrderRepository
             .FirstAsync(cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
-
-        var domainEvents = order.DomainEvents.ToList();
-        if (paymentRefunded is not null)
-        {
-            domainEvents.Add(paymentRefunded);
-        }
 
         order.ClearDomainEvents();
 
@@ -242,6 +251,7 @@ public class OrderRepository : IOrderRepository
         return TransitionAsync(
             orderId,
             order => order.Ship(utcNow),
+            utcNow,
             cancellationToken);
     }
 
@@ -253,6 +263,7 @@ public class OrderRepository : IOrderRepository
         return TransitionAsync(
             orderId,
             order => order.Deliver(utcNow),
+            utcNow,
             cancellationToken);
     }
 
@@ -321,6 +332,17 @@ public class OrderRepository : IOrderRepository
                 "conflict");
         }
 
+        var domainEvents = order.DomainEvents.ToList();
+        if (paymentRefunded is not null)
+        {
+            domainEvents.Add(paymentRefunded);
+        }
+
+        foreach (var domainEvent in domainEvents)
+        {
+            await _outboxRepository.AddAsync(domainEvent, utcNow, cancellationToken);
+        }
+
         _dbContext.Entry(order).Property(entry => entry.Status).IsModified = true;
 
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -328,12 +350,6 @@ public class OrderRepository : IOrderRepository
         var newRowVersion = await GetCurrentRowVersionAsync(orderId, cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
-
-        var domainEvents = order.DomainEvents.ToList();
-        if (paymentRefunded is not null)
-        {
-            domainEvents.Add(paymentRefunded);
-        }
 
         order.ClearDomainEvents();
 
@@ -412,6 +428,7 @@ public class OrderRepository : IOrderRepository
     private async Task<(OrderTransitionResult Result, Order? Order, OrderStatus? CurrentStatus, byte[]? NewRowVersion, IReadOnlyList<object> DomainEvents)> TransitionAsync(
         Guid orderId,
         Action<Order> transition,
+        DateTime utcNow,
         CancellationToken cancellationToken)
     {
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
@@ -436,6 +453,13 @@ public class OrderRepository : IOrderRepository
             return (OrderTransitionResult.InvalidTransition, null, currentStatus, null, Array.Empty<object>());
         }
 
+        var domainEvents = order.DomainEvents.ToList();
+
+        foreach (var domainEvent in domainEvents)
+        {
+            await _outboxRepository.AddAsync(domainEvent, utcNow, cancellationToken);
+        }
+
         _dbContext.Entry(order).Property(entry => entry.Status).IsModified = true;
 
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -444,7 +468,6 @@ public class OrderRepository : IOrderRepository
 
         await transaction.CommitAsync(cancellationToken);
 
-        var domainEvents = order.DomainEvents.ToList();
         order.ClearDomainEvents();
 
         _dbContext.ChangeTracker.Clear();

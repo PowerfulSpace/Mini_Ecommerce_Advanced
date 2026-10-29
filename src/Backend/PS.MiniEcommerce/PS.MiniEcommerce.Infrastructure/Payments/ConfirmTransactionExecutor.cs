@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using PS.MiniEcommerce.Application.Abstractions.Outbox;
 using PS.MiniEcommerce.Application.Abstractions.Payments;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Exceptions;
@@ -24,19 +25,22 @@ public class ConfirmTransactionExecutor : IConfirmTransactionExecutor
     private readonly IPaymentRepository _paymentRepository;
     private readonly IPaymentProvider _paymentProvider;
     private readonly ConfirmAttemptContext _confirmAttemptContext;
+    private readonly IOutboxRepository _outboxRepository;
 
     public ConfirmTransactionExecutor(
         AppDbContext dbContext,
         IOrderRepository orderRepository,
         IPaymentRepository paymentRepository,
         IPaymentProvider paymentProvider,
-        ConfirmAttemptContext confirmAttemptContext)
+        ConfirmAttemptContext confirmAttemptContext,
+        IOutboxRepository outboxRepository)
     {
         _dbContext = dbContext;
         _orderRepository = orderRepository;
         _paymentRepository = paymentRepository;
         _paymentProvider = paymentProvider;
         _confirmAttemptContext = confirmAttemptContext;
+        _outboxRepository = outboxRepository;
     }
 
     public async Task<ConfirmExecutionResult> ExecuteAsync(
@@ -56,6 +60,7 @@ public class ConfirmTransactionExecutor : IConfirmTransactionExecutor
         Order? order = null;
         string? responsePayload = null;
         var paymentFailed = false;
+        var domainEvents = new List<object>();
 
         try
         {
@@ -150,6 +155,18 @@ public class ConfirmTransactionExecutor : IConfirmTransactionExecutor
 
                 order.MarkPaid(utcNow);
 
+                domainEvents.Add(new PaymentConfirmed(
+                    payment.Id,
+                    payment.OrderId,
+                    payment.Amount,
+                    utcNow));
+                domainEvents.AddRange(order.DomainEvents);
+
+                foreach (var domainEvent in domainEvents)
+                {
+                    await _outboxRepository.AddAsync(domainEvent, utcNow, cancellationToken);
+                }
+
                 await _dbContext.SaveChangesAsync(cancellationToken);
 
                 responsePayload = JsonSerializer.Serialize(payment.ToDto(), JsonOptions);
@@ -184,12 +201,6 @@ public class ConfirmTransactionExecutor : IConfirmTransactionExecutor
             throw new InvalidOperationException("Payment confirmation did not produce a result.");
         }
 
-        var domainEvents = new List<object>
-        {
-            new PaymentConfirmed(payment.Id, payment.OrderId, payment.Amount, utcNow)
-        };
-
-        domainEvents.AddRange(order.DomainEvents);
         order.ClearDomainEvents();
 
         return new ConfirmExecutionResult(

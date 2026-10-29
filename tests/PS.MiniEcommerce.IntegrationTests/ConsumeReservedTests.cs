@@ -45,7 +45,11 @@ public class ConsumeReservedTests : IAsyncLifetime
 
         await using (var context = CreateContext())
         {
-            var repository = new OrderRepository(context, new PaymentRepository(context), new PaymentRefundService());
+            var repository = new OrderRepository(
+                context,
+                new PaymentRepository(context),
+                new PaymentRefundService(),
+                new OutboxRepository(context));
             await repository.ConsumeReservedAsync(orderId, CancellationToken.None);
         }
 
@@ -65,7 +69,11 @@ public class ConsumeReservedTests : IAsyncLifetime
 
         await using (var context = CreateContext())
         {
-            var repository = new OrderRepository(context, new PaymentRepository(context), new PaymentRefundService());
+            var repository = new OrderRepository(
+                context,
+                new PaymentRepository(context),
+                new PaymentRefundService(),
+                new OutboxRepository(context));
 
             var exception = await Assert.ThrowsAsync<DomainConflictException>(
                 () => repository.ConsumeReservedAsync(orderId, CancellationToken.None));

@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using PS.MiniEcommerce.Application.Abstractions.Outbox;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Domain.Exceptions;
@@ -8,10 +9,12 @@ namespace PS.MiniEcommerce.Infrastructure.Persistence;
 public class ProductRepository : IProductRepository
 {
     private readonly AppDbContext _dbContext;
+    private readonly IOutboxRepository _outboxRepository;
 
-    public ProductRepository(AppDbContext dbContext)
+    public ProductRepository(AppDbContext dbContext, IOutboxRepository outboxRepository)
     {
         _dbContext = dbContext;
+        _outboxRepository = outboxRepository;
     }
 
     public async Task<(IReadOnlyList<Product> Items, int TotalCount)> GetActivePagedAsync(
@@ -77,9 +80,16 @@ public class ProductRepository : IProductRepository
         }
 
         product.Deactivate(utcNow);
-        await _dbContext.SaveChangesAsync(cancellationToken);
 
         var domainEvents = product.DomainEvents.ToList();
+
+        foreach (var domainEvent in domainEvents)
+        {
+            await _outboxRepository.AddAsync(domainEvent, utcNow, cancellationToken);
+        }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
         product.ClearDomainEvents();
 
         return (product, domainEvents);
@@ -135,6 +145,15 @@ public class ProductRepository : IProductRepository
 
             var domainEvents = product.DomainEvents.ToList();
             product.ClearDomainEvents();
+
+            _dbContext.Entry(product).State = EntityState.Detached;
+
+            foreach (var domainEvent in domainEvents)
+            {
+                await _outboxRepository.AddAsync(domainEvent, utcNow, cancellationToken);
+            }
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
             _dbContext.ChangeTracker.Clear();

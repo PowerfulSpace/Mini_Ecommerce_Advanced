@@ -581,9 +581,17 @@ MVP+ не включает:
 - `PaymentAttempt` использует lease 30 секунд, bounded wait 3 секунды и polling
   каждые 100 мс; просроченный lease может быть перехвачен повторным запросом с
   тем же ключом.
+- `PaymentAttempt` дублирует lease (30 с), bounded wait (3 с, poll 100 мс) и
+  recovery on-demand из `CheckoutAttempt`; обобщение `CheckoutAttempt` не
+  вводится (осознанное решение, P1). Дублирование — цена за независимость
+  таблиц; вынос в общий helper — вне MVP+.
 - Порядок блокировок в confirm, cancel и return — `Order`, затем `Payment`;
   admin refund блокирует только `Payment`. Единый порядок предотвращает
   взаимные блокировки.
+- Детерминированный integration-тест на deadlock между confirm и cancel/return
+  не добавлен: сценарий требует точной синхронизации и был бы нестабильным.
+  Порядок блокировок `Order → Payment` зафиксирован в confirm/cancel/return и
+  проверяется code review; admin refund блокирует только `Payment`.
 - `refund_not_allowed` (`409`) возвращается для refund при `Pending`, `Failed`
   или `Refunded`, а также при превышении остатка.
 - DTO заказа (`GET /api/orders`, `GET /api/orders/{id}` и checkout `201`)
@@ -614,6 +622,8 @@ MVP+ не включает:
   реализован; README.md, PROJECT.md §1, ROADMAP.md §20, FRONTEND.md §1,
   architecture.md §13 обновлены. AGENTS.md, PROJECT.md, NEXT_STEPS.md — статус
   проекта синхронизирован с фактом (MVP+ реализован).
+
+MVP+ (M1–M8, M12, M13; этапы 12–19) закрыт: build 0/0, unit 333, integration 174, frontend 149 + lint + type-check, миграции 11, has-pending — No changes, check-doc-links — 0 broken; E2E-цепочка, cart-изоляция, post-commit payment-события и ActorUserId покрыты. M9, M10, M11, M14 — вне объёма.
 
 Примечание: путь «недостижимого» конфликта D2 теперь возвращает временный
 `503 checkout_retry` (попытка остаётся `InProgress`), а не `500`.

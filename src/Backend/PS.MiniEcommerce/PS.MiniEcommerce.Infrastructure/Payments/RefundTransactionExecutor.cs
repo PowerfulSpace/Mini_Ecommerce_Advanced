@@ -1,4 +1,5 @@
 using System.Text.Json;
+using PS.MiniEcommerce.Application.Abstractions.Outbox;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Exceptions;
 using PS.MiniEcommerce.Application.Payments;
@@ -21,17 +22,20 @@ public class RefundTransactionExecutor : IRefundTransactionExecutor
     private readonly IPaymentRepository _paymentRepository;
     private readonly IPaymentAttemptRepository _paymentAttemptRepository;
     private readonly IPaymentRefundService _paymentRefundService;
+    private readonly IOutboxRepository _outboxRepository;
 
     public RefundTransactionExecutor(
         AppDbContext dbContext,
         IPaymentRepository paymentRepository,
         IPaymentAttemptRepository paymentAttemptRepository,
-        IPaymentRefundService paymentRefundService)
+        IPaymentRefundService paymentRefundService,
+        IOutboxRepository outboxRepository)
     {
         _dbContext = dbContext;
         _paymentRepository = paymentRepository;
         _paymentAttemptRepository = paymentAttemptRepository;
         _paymentRefundService = paymentRefundService;
+        _outboxRepository = outboxRepository;
     }
 
     public async Task<RefundExecutionResult> ExecuteAsync(
@@ -63,6 +67,15 @@ public class RefundTransactionExecutor : IRefundTransactionExecutor
                 utcNow,
                 cancellationToken);
 
+            var domainEvent = new PaymentRefunded(
+                payment.Id,
+                payment.OrderId,
+                amount,
+                utcNow,
+                reason);
+
+            await _outboxRepository.AddAsync(domainEvent, utcNow, cancellationToken);
+
             await _dbContext.SaveChangesAsync(cancellationToken);
 
             var responsePayload = JsonSerializer.Serialize(payment.ToDto(), JsonOptions);
@@ -83,10 +96,7 @@ public class RefundTransactionExecutor : IRefundTransactionExecutor
                 ResponsePayload: responsePayload,
                 OrderId: payment.OrderId,
                 PaymentId: payment.Id,
-                DomainEvents: new object[]
-                {
-                    new PaymentRefunded(payment.Id, payment.OrderId, amount, utcNow, reason)
-                });
+                DomainEvents: new object[] { domainEvent });
         }
         catch (Exception exception) when (exception is DomainException or NotFoundException or ValidationException)
         {

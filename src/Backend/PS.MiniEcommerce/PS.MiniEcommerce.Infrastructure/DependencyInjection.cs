@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using PS.MiniEcommerce.Application.Abstractions.Outbox;
 using PS.MiniEcommerce.Application.Abstractions.Payments;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Checkout;
@@ -39,6 +40,8 @@ public static class DependencyInjection
         services.AddScoped<IPaymentAttemptRepository, PaymentAttemptRepository>();
 
         services.AddScoped<IAuditLogRepository, AuditLogRepository>();
+
+        services.AddScoped<IOutboxRepository, OutboxRepository>();
 
         services.AddScoped<IPaymentProvider, MockPaymentProvider>();
 

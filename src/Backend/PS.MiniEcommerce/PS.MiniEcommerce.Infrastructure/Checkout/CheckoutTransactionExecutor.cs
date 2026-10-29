@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using PS.MiniEcommerce.Application.Abstractions.Outbox;
 using PS.MiniEcommerce.Application.Carts;
 using PS.MiniEcommerce.Application.Checkout;
 using PS.MiniEcommerce.Application.Checkout.Exceptions;
@@ -22,15 +23,18 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
 
     private readonly AppDbContext _dbContext;
     private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly IOutboxRepository _outboxRepository;
     private readonly ILogger<CheckoutTransactionExecutor> _logger;
 
     public CheckoutTransactionExecutor(
         AppDbContext dbContext,
         IServiceScopeFactory serviceScopeFactory,
+        IOutboxRepository outboxRepository,
         ILogger<CheckoutTransactionExecutor> logger)
     {
         _dbContext = dbContext;
         _serviceScopeFactory = serviceScopeFactory;
+        _outboxRepository = outboxRepository;
         _logger = logger;
     }
 
@@ -198,6 +202,11 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
 
         var order = Order.Create(userId, orderItems, utcNow);
         _dbContext.Orders.Add(order);
+
+        foreach (var domainEvent in order.DomainEvents)
+        {
+            await _outboxRepository.AddAsync(domainEvent, utcNow, cancellationToken);
+        }
 
         cart.RemoveSelected(utcNow);
 

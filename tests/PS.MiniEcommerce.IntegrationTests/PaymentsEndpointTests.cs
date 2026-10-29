@@ -89,9 +89,44 @@ public class PaymentsEndpointTests : IAsyncLifetime
         Assert.Single(_capture.Events.OfType<PaymentConfirmed>());
         Assert.Single(_capture.Events.OfType<OrderPaid>());
 
+        var aliceUserId = await GetUserIdAsync(SeedData.AliceEmail);
         var audits = await GetAuditLogsAsync();
-        Assert.Contains(audits, audit => audit.Action == "PaymentConfirmed" && audit.EntityId == order.PaymentId);
+        var paymentConfirmedAudit = Assert.Single(
+            audits,
+            audit => audit.Action == "PaymentConfirmed" && audit.EntityId == order.PaymentId);
+        Assert.Equal(aliceUserId, paymentConfirmedAudit.ActorUserId);
         Assert.Contains(audits, audit => audit.Action == "OrderPaid" && audit.EntityId == order.OrderId);
+    }
+
+    [Fact]
+    public async Task Confirm_PaymentConfirmedAndOrderPaidAreVisibleAfterCommit()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+
+        var response = await ConfirmAsync(_client, order.PaymentId, "confirm-post-commit-1");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(_capture.PaymentConfirmedWasVisibleAfterCommit);
+        Assert.True(_capture.OrderPaidWasVisibleAfterCommit);
+    }
+
+    [Fact]
+    public async Task Refund_PaymentRefundedIsVisibleAfterCommit()
+    {
+        var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);
+        await ConfirmAsync(_client, order.PaymentId, "refund-post-commit-confirm-1");
+        var payment = await GetPaymentAsync(order.PaymentId);
+        Assert.NotNull(payment);
+
+        var response = await RefundAsync(
+            _client,
+            order.PaymentId,
+            payment.Amount.Amount,
+            reason: null,
+            "refund-post-commit-1");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(_capture.PaymentRefundedWasVisibleAfterCommit);
     }
 
     [Fact]
