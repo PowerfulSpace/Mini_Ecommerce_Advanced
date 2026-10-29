@@ -7,6 +7,7 @@ using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Checkout;
 using PS.MiniEcommerce.Application.Payments;
 using PS.MiniEcommerce.Infrastructure.Checkout;
+using PS.MiniEcommerce.Infrastructure.Outbox;
 using PS.MiniEcommerce.Infrastructure.Payments;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 using PS.MiniEcommerce.Infrastructure.Seed;
@@ -52,6 +53,8 @@ public static class DependencyInjection
         services.AddScoped<IPaymentRefundService, PaymentRefundService>();
 
         services.AddScoped<IRefundTransactionExecutor, RefundTransactionExecutor>();
+
+        services.AddHostedService<OutboxDispatcher>();
 
         return services;
     }

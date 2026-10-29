@@ -39,8 +39,11 @@
   `Cart.RowVersion`; используется для `If-Match` на отмене. См.
   [ADR-006](adr/ADR-006-partial-checkout-and-cancellation.md),
   [data-model.md](architecture/data-model.md) §4.5.
-- Доменные события публикуются через MediatR после commit, без outbox; см.
-  [ADR-007](adr/ADR-007-domain-events.md).
+- Доменные события публикуются через MediatR после commit; in-process публикация
+  не использует outbox; см. [ADR-007](adr/ADR-007-domain-events.md).
+- Outbox (`OutboxMessages`, `OutboxDispatcher`, `IOutboxSubscriber`) — этап 20,
+  вне MVP+; at-least-once для внешних, audit at-most-once. См.
+  [ADR-011](adr/ADR-011-outbox.md).
 - Платежи и их идемпотентность определены в
   [ADR-008](adr/ADR-008-payments-and-idempotency.md).
 - Admin API и роль admin определены в
@@ -564,7 +567,19 @@ MVP+ не включает:
   `Payment`/`Refund`); `IPaymentProvider.RefundAsync` в текущем сценарии не
   вызывается. См. `payments.md` §5, `api.md` §3.5.
 - Аудит работает at-most-once: при сбое handler'а audit-запись теряется; outbox
-  и retry отсутствуют.
+  для audit и retry отсутствуют.
+- Outbox (этап 20): at-least-once для внешних подписчиков (`IOutboxSubscriber`);
+  audit остаётся in-process at-most-once (ADR-010 не меняется). См.
+  [ADR-011](adr/ADR-011-outbox.md).
+- Outbox: Failed через `ProcessedAtUtc` при `Attempts >= 5`; отдельного
+  `FailedAtUtc` нет; cleanup обработанных/Failed записей отсутствует.
+- Outbox: порядок между сообщениями не гарантирован; подписчики должны быть
+  идемпотентными.
+- Outbox: retry 5 с backoff 1/2/4/8/16s, poll 1s, batch 20; `EventType` —
+  полное имя без assembly-версии; `Payload` — JSON с `MoneyJsonConverter`.
+- Документы MVP+ (README.md, PROJECT.md, SPEC.md, DOMAIN.md, api.md, payments.md,
+  FRONTEND.md) не упоминают outbox, т.к. outbox — этап 20, вне MVP+. Актуальное
+  описание — ADR-011, events.md §9, data-model.md §4.13, DECISIONS.md §13.
 - TTL, cleanup и фоновое освобождение резервов отсутствуют; `Created` может
   удерживать `Reserved` неограниченно долго.
 - `PaymentAttempt` и `CheckoutAttempt` не очищаются автоматически.

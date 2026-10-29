@@ -131,6 +131,7 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         Assert.Equal(stockBefore.Available, stockAfterFirst.Available);
         Assert.Equal(stockBefore.Reserved, stockAfterFirst.Reserved);
         Assert.Equal(1, await GetAliceCartItemCountAsync());
+        Assert.InRange(await GetOutboxCountAsync(), 0, 1);
         Assert.Empty(capture.Events);
         Assert.Null(capture.OrderPlacedWasVisibleAfterCommit);
 
@@ -153,6 +154,7 @@ public class CheckoutRecoveryTests : IAsyncLifetime
         Assert.Equal(stockBefore.Available, stockAfterSecond.Available);
         Assert.Equal(stockBefore.Reserved, stockAfterSecond.Reserved);
         Assert.Equal(1, await GetAliceCartItemCountAsync());
+        Assert.InRange(await GetOutboxCountAsync(), 0, 1);
     }
 
     [Fact]
@@ -420,6 +422,12 @@ public class CheckoutRecoveryTests : IAsyncLifetime
     {
         await using var context = CreateContext();
         return await context.Payments.AsNoTracking().CountAsync();
+    }
+
+    private async Task<int> GetOutboxCountAsync()
+    {
+        await using var context = CreateContext();
+        return await context.OutboxMessages.AsNoTracking().CountAsync();
     }
 
     private async Task<int> GetAliceCartItemCountAsync()

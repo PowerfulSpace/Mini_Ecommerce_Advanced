@@ -29,6 +29,9 @@ public class OutboxMessageConfiguration : IEntityTypeConfiguration<OutboxMessage
         builder.Property(message => message.ProcessedAtUtc)
             .IsRequired(false);
 
+        builder.Property(message => message.LastAttemptAtUtc)
+            .IsRequired(false);
+
         builder.Property(message => message.Attempts)
             .IsRequired()
             .HasDefaultValue(0);

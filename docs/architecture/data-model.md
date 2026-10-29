@@ -505,6 +505,41 @@ SQL Server автоматически создаёт и обновляет зн�
 - `AuditLog` не удаляется каскадно вместе с пользователем, заказом или платежом.
 - См. [ADR-010](../adr/ADR-010-audit.md).
 
+### 4.13 OutboxMessage
+
+Представляет сообщение outbox для доставки внешним подписчикам.
+
+| Свойство | Предлагаемый тип SQL | Требования |
+|---|---|---|
+| `Id` | `uniqueidentifier` | Первичный ключ; `ValueGeneratedNever` |
+| `EventType` | `nvarchar(512)` | Обязательно; полное имя типа события без assembly-версии |
+| `Payload` | `nvarchar(max)` | Обязательно; JSON с `MoneyJsonConverter` |
+| `CreatedAtUtc` | `datetime2` | Обязательно; UTC |
+| `ProcessedAtUtc` | `datetime2` | NULL; при `Attempts >= 5` — Failed |
+| `LastAttemptAtUtc` | `datetime2` | NULL |
+| `Attempts` | `int` | Обязательно; default 0 |
+| `LastError` | `nvarchar(2000)` | NULL |
+
+Требования:
+
+- Индекс `(ProcessedAtUtc, CreatedAtUtc)` используется dispatcher'ом.
+- Сообщение записывается в той же транзакции, что и бизнес-операция, в девяти
+  точках: checkout, cancel, return, ship, deliver, confirm, refund, admin stock
+  и admin deactivate.
+- `OutboxDispatcher` — `BackgroundService`: poll 1s, batch 20, до 5 попыток,
+  backoff 1/2/4/8/16s в зависимости от `Attempts`.
+- При `Attempts >= 5` сообщение помечается Failed через `ProcessedAtUtc`;
+  отдельного `FailedAtUtc` нет.
+- `IOutboxSubscriber` определён в Application и не является
+  `INotificationHandler`; dispatcher резолвит подписчиков из DI. Audit handler
+  dispatcher'ом не вызывается.
+- Доставка внешним подписчикам — at-least-once; подписчики должны быть
+  идемпотентными. Порядок между сообщениями не гарантирован.
+- Audit остаётся in-process и работает at-most-once по
+  [ADR-010](../adr/ADR-010-audit.md); outbox для audit не используется.
+- Cleanup обработанных и Failed записей отсутствует.
+- См. [ADR-011](../adr/ADR-011-outbox.md), [events.md](events.md) §9.
+
 ## 5. Связи
 
 Предполагаемые связи:
@@ -755,9 +790,10 @@ refund повторно; проигравшие попытки получают 
 ### 9.5 Аудит
 
 `AuditLog` создаётся после commit бизнес-операции, в отдельной транзакции.
-Сбой записи аудита не откатывает бизнес-операцию; доставка at-most-once,
-автоматический retry и outbox отсутствуют. См.
-[ADR-007](../adr/ADR-007-domain-events.md) и
+Сбой записи аудита не откатывает бизнес-операцию; retry для audit отсутствует
+(at-most-once); outbox введён как этап 20 для внешних подписчиков
+(at-least-once, см. [ADR-011](../adr/ADR-011-outbox.md)), audit в outbox не
+участвует. См. [ADR-007](../adr/ADR-007-domain-events.md) и
 [ADR-010](../adr/ADR-010-audit.md).
 
 ### 9.6 Конкурентный доступ к корзине
@@ -822,19 +858,30 @@ refund повторно; проигравшие попытки получают 
    `AddOrderStatusesAndPaymentId`.
 9. `AddPaymentAttempts` (этап 19) — создаёт `PaymentAttempt`; выполняется после
    `AddPaymentsAndRefunds`.
+10. `AddOutbox` (этап 20) — создаёт `OutboxMessages` (`Id`, `EventType`
+    `nvarchar(512)`, `Payload` `nvarchar(max)`, `CreatedAtUtc`,
+    `ProcessedAtUtc?`, `Attempts` `int DEFAULT 0`, `LastError`
+    `nvarchar(2000)?`) с индексом `(ProcessedAtUtc, CreatedAtUtc)`; выполняется
+    после `AddPaymentAttempts`.
+11. `AddOutboxLastAttemptAtUtc` (этап 20) — добавляет
+    `OutboxMessages.LastAttemptAtUtc` (`datetime2 NULL`); выполняется после
+    `AddOutbox`.
 
 Порядок миграций должен соответствовать зависимостям внешних ключей. FK
 `Order.PaymentId → Payment` создаётся в `AddPaymentsAndRefunds`. Поле
 `Order.PaymentId` уже добавлено в `AddOrderStatusesAndPaymentId`.
 `AddAuditLog` применён после `AddOrderRowVersionAndCancellations` и до
 `AddUserRole`; `AddUserRole` и `AddProductRowVersion` не зависят от FK платежей.
+`AddOutbox` и `AddOutboxLastAttemptAtUtc` выполняются после
+`AddPaymentAttempts`.
 
 ## 12. Будущее развитие
 
 Следующие возможности находятся вне MVP+ и не должны добавлять таблицы или
 столбцы в текущую схему:
 
-- Outbox и гарантированная доставка событий.
+- Outbox и гарантированная доставка событий — реализованы как этап 20 (вне
+  MVP+); см. [ADR-011](../adr/ADR-011-outbox.md).
 - TTL резервов, cleanup и автоматическое освобождение.
 - Reconciliation платежей.
 - Реальный платёжный провайдер, Stripe и вебхуки.

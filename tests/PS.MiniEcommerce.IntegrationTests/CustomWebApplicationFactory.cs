@@ -6,9 +6,12 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using PS.MiniEcommerce.Application.Abstractions.Outbox;
 using PS.MiniEcommerce.Application.Events;
 using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Infrastructure;
+using PS.MiniEcommerce.Infrastructure.Outbox;
 
 namespace PS.MiniEcommerce.IntegrationTests;
 
@@ -18,6 +21,8 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
     private readonly string _environment;
     private readonly ISaveChangesInterceptor? _saveChangesInterceptor;
     private readonly NotificationCapture? _notificationCapture;
+    private readonly OutboxCapture? _outboxCapture;
+    private readonly bool _enableOutboxDispatcher;
     private readonly Action<IServiceCollection>? _configureTestServices;
 
     public CustomWebApplicationFactory(
@@ -25,12 +30,16 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
         string environment = "Development",
         ISaveChangesInterceptor? saveChangesInterceptor = null,
         NotificationCapture? notificationCapture = null,
-        Action<IServiceCollection>? configureTestServices = null)
+        Action<IServiceCollection>? configureTestServices = null,
+        OutboxCapture? outboxCapture = null,
+        bool enableOutboxDispatcher = false)
     {
         _connectionString = connectionString;
         _environment = environment;
         _saveChangesInterceptor = saveChangesInterceptor;
         _notificationCapture = notificationCapture;
+        _outboxCapture = outboxCapture;
+        _enableOutboxDispatcher = enableOutboxDispatcher;
         _configureTestServices = configureTestServices;
     }
 
@@ -60,6 +69,24 @@ public class CustomWebApplicationFactory : WebApplicationFactory<Program>
             {
                 services.AddSingleton(_notificationCapture);
                 AddCaptureHandlers(services);
+            }
+
+            if (_outboxCapture is not null)
+            {
+                services.AddSingleton(_outboxCapture);
+                services.AddSingleton<IOutboxSubscriber, TestOutboxSubscriber>();
+            }
+
+            if (!_enableOutboxDispatcher)
+            {
+                var dispatcher = services.FirstOrDefault(
+                    descriptor => descriptor.ServiceType == typeof(IHostedService)
+                        && descriptor.ImplementationType == typeof(OutboxDispatcher));
+
+                if (dispatcher is not null)
+                {
+                    services.Remove(dispatcher);
+                }
             }
 
             _configureTestServices?.Invoke(services);
