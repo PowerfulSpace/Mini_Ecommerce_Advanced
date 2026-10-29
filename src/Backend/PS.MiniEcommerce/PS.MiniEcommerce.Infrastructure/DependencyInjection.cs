@@ -5,8 +5,10 @@ using PS.MiniEcommerce.Application.Abstractions.Outbox;
 using PS.MiniEcommerce.Application.Abstractions.Payments;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Checkout;
+using PS.MiniEcommerce.Application.Notifications;
 using PS.MiniEcommerce.Application.Payments;
 using PS.MiniEcommerce.Infrastructure.Checkout;
+using PS.MiniEcommerce.Infrastructure.Notifications;
 using PS.MiniEcommerce.Infrastructure.Outbox;
 using PS.MiniEcommerce.Infrastructure.Payments;
 using PS.MiniEcommerce.Infrastructure.Persistence;
@@ -43,6 +45,10 @@ public static class DependencyInjection
         services.AddScoped<IAuditLogRepository, AuditLogRepository>();
 
         services.AddScoped<IOutboxRepository, OutboxRepository>();
+
+        services.AddSingleton<INotificationStore, InMemoryNotificationStore>();
+
+        services.AddScoped<IOutboxSubscriber, NotificationSubscriber>();
 
         services.AddScoped<IPaymentProvider, MockPaymentProvider>();
 

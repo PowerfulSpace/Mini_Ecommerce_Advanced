@@ -90,6 +90,15 @@ public class OrderRepository : IOrderRepository
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    public async Task<Guid?> GetOrderUserIdAsync(Guid orderId, CancellationToken cancellationToken)
+    {
+        return await _dbContext.Orders
+            .AsNoTracking()
+            .Where(order => order.Id == orderId)
+            .Select(order => (Guid?)order.UserId)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     public async Task<(CancelOrderResult Result, Order? Order, OrderStatus? CurrentStatus, byte[]? NewRowVersion, IReadOnlyList<object> DomainEvents)> CancelAsync(
         Guid orderId,
         Guid userId,
