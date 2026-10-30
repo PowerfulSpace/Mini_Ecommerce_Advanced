@@ -15,7 +15,7 @@ public sealed class InMemoryNotificationStore : INotificationStore
         _logger = logger;
     }
 
-    public void Add(Notification notification)
+    public bool TryAdd(Notification notification)
     {
         var key = (notification.EventType, notification.EntityId, notification.OccurredAtUtc);
 
@@ -26,7 +26,7 @@ public sealed class InMemoryNotificationStore : INotificationStore
                 notification.EventType,
                 notification.EntityId,
                 notification.OccurredAtUtc);
-            return;
+            return false;
         }
 
         _logger.LogInformation(
@@ -35,6 +35,7 @@ public sealed class InMemoryNotificationStore : INotificationStore
             notification.EntityId,
             notification.UserId,
             notification.Message);
+        return true;
     }
 
     public IReadOnlyList<Notification> GetAll() =>

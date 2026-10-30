@@ -9,40 +9,41 @@ public class InMemoryNotificationStoreTests
     private static readonly DateTime OccurredAtUtc = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
     [Fact]
-    public void Add_WhenNotificationIsNew_StoresNotification()
+    public void TryAdd_WhenNotificationIsNew_StoresNotificationAndReturnsTrue()
     {
         var store = CreateStore();
         var notification = CreateNotification();
 
-        store.Add(notification);
+        var added = store.TryAdd(notification);
 
+        Assert.True(added);
         var stored = Assert.Single(store.GetAll());
         Assert.Equal(notification, stored);
     }
 
     [Fact]
-    public void Add_WhenNotificationHasSameNaturalKey_DoesNotDuplicate()
+    public void TryAdd_WhenNotificationHasSameNaturalKey_ReturnsFalseAndDoesNotDuplicate()
     {
         var store = CreateStore();
         var first = CreateNotification();
         var duplicate = first with { CreatedAtUtc = first.CreatedAtUtc.AddMinutes(1) };
 
-        store.Add(first);
-        store.Add(duplicate);
+        Assert.True(store.TryAdd(first));
+        Assert.False(store.TryAdd(duplicate));
 
         var stored = Assert.Single(store.GetAll());
         Assert.Equal(first, stored);
     }
 
     [Fact]
-    public void Add_WhenNaturalKeysDiffer_StoresBothNotifications()
+    public void TryAdd_WhenNaturalKeysDiffer_StoresBothNotifications()
     {
         var store = CreateStore();
         var first = CreateNotification();
         var second = CreateNotification(entityId: Guid.NewGuid());
 
-        store.Add(first);
-        store.Add(second);
+        Assert.True(store.TryAdd(first));
+        Assert.True(store.TryAdd(second));
 
         Assert.Equal(2, store.GetAll().Count);
     }
@@ -51,11 +52,11 @@ public class InMemoryNotificationStoreTests
     public void GetAll_ReturnsSnapshot()
     {
         var store = CreateStore();
-        store.Add(CreateNotification());
+        store.TryAdd(CreateNotification());
 
         var snapshot = store.GetAll();
 
-        store.Add(CreateNotification(entityId: Guid.NewGuid()));
+        store.TryAdd(CreateNotification(entityId: Guid.NewGuid()));
 
         Assert.Single(snapshot);
         Assert.Equal(2, store.GetAll().Count);

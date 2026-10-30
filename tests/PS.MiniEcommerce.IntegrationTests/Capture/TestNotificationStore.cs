@@ -7,12 +7,10 @@ public sealed class TestNotificationStore : INotificationStore
 {
     private readonly ConcurrentDictionary<(string EventType, Guid EntityId, DateTime OccurredAtUtc), Notification> _notifications = new();
 
-    public void Add(Notification notification)
-    {
+    public bool TryAdd(Notification notification) =>
         _notifications.TryAdd(
             (notification.EventType, notification.EntityId, notification.OccurredAtUtc),
             notification);
-    }
 
     public IReadOnlyList<Notification> GetAll() => _notifications.Values.ToList();
 

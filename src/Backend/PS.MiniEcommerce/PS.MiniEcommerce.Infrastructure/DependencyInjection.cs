@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using PS.MiniEcommerce.Application.Abstractions.Outbox;
 using PS.MiniEcommerce.Application.Abstractions.Payments;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
@@ -36,6 +37,8 @@ public static class DependencyInjection
 
         services.AddScoped<IOrderRepository, OrderRepository>();
 
+        services.AddScoped<IUserRepository, UserRepository>();
+
         services.AddScoped<IPaymentRepository, PaymentRepository>();
 
         services.AddScoped<ICheckoutAttemptRepository, CheckoutAttemptRepository>();
@@ -47,6 +50,21 @@ public static class DependencyInjection
         services.AddScoped<IOutboxRepository, OutboxRepository>();
 
         services.AddSingleton<INotificationStore, InMemoryNotificationStore>();
+
+        services.Configure<SmtpOptions>(configuration.GetSection("Smtp"));
+        services.AddSingleton<IValidateOptions<SmtpOptions>, SmtpOptionsValidator>();
+        services.AddOptions<SmtpOptions>().ValidateOnStart();
+
+        services.AddScoped<MockNotificationSender>();
+        services.AddScoped<SmtpNotificationSender>();
+        services.AddScoped<INotificationSender>(serviceProvider =>
+        {
+            var options = serviceProvider.GetRequiredService<IOptions<SmtpOptions>>().Value;
+
+            return options.Enabled
+                ? serviceProvider.GetRequiredService<SmtpNotificationSender>()
+                : serviceProvider.GetRequiredService<MockNotificationSender>();
+        });
 
         services.AddScoped<IOutboxSubscriber, NotificationSubscriber>();
 

@@ -2,7 +2,7 @@ namespace PS.MiniEcommerce.Application.Notifications;
 
 public interface INotificationStore
 {
-    void Add(Notification notification);
+    bool TryAdd(Notification notification);
 
     IReadOnlyList<Notification> GetAll();
 }
