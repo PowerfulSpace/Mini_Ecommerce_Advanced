@@ -153,12 +153,12 @@ public sealed class NotificationSubscriber : IOutboxSubscriber
             message,
             amount);
 
+        await _notificationSender.SendAsync(email, notification, cancellationToken);
+
         if (!_notificationStore.TryAdd(notification))
         {
-            return;
+            _logger.LogDebug("Duplicate notification suppressed.");
         }
-
-        await _notificationSender.SendAsync(email, notification, cancellationToken);
     }
 
     private async Task AddPaymentNotificationAsync(

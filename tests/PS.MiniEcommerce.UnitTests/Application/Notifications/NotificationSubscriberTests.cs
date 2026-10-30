@@ -309,7 +309,7 @@ public class NotificationSubscriberTests
     }
 
     [Fact]
-    public async Task Handle_WhenNotificationAlreadyStored_DoesNotSendAgain()
+    public async Task Handle_WhenNotificationAlreadyStored_SendsAgainAndKeepsSingleStoreEntry()
     {
         var domainEvent = new OrderShipped(Guid.NewGuid(), Guid.NewGuid(), OccurredAtUtc);
         var subscriber = CreateSubscriber();
@@ -318,11 +318,77 @@ public class NotificationSubscriberTests
         await subscriber.HandleAsync(domainEvent, CancellationToken.None);
 
         Assert.Single(_notificationStore.GetAll());
+        await _notificationSender.Received(2)
+            .SendAsync(
+                Email,
+                Arg.Is<Notification>(notification => notification.EventType == nameof(OrderShipped)),
+                Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Handle_SendsEmailBeforeStoringNotification()
+    {
+        var store = Substitute.For<INotificationStore>();
+        store.TryAdd(Arg.Any<Notification>()).Returns(true);
+        var subscriber = new NotificationSubscriber(
+            _orderRepository,
+            _userRepository,
+            store,
+            _notificationSender,
+            _logger);
+
+        await subscriber.HandleAsync(
+            new OrderShipped(Guid.NewGuid(), Guid.NewGuid(), OccurredAtUtc),
+            CancellationToken.None);
+
+        Received.InOrder(() =>
+        {
+            _notificationSender.SendAsync(
+                Email,
+                Arg.Is<Notification>(notification => notification.EventType == nameof(OrderShipped)),
+                Arg.Any<CancellationToken>());
+            store.TryAdd(Arg.Any<Notification>());
+        });
+    }
+
+    [Fact]
+    public async Task Handle_WhenSendAsyncThrows_DoesNotStoreNotificationAndPropagates()
+    {
+        _notificationSender
+            .SendAsync(Arg.Any<string>(), Arg.Any<Notification>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("SMTP failure")));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CreateSubscriber().HandleAsync(
+                new OrderShipped(Guid.NewGuid(), Guid.NewGuid(), OccurredAtUtc),
+                CancellationToken.None));
+
+        Assert.Equal("SMTP failure", exception.Message);
+        Assert.Empty(_notificationStore.GetAll());
+    }
+
+    [Fact]
+    public async Task Handle_WhenTryAddReturnsFalse_DoesNotThrowAndStillSends()
+    {
+        var store = Substitute.For<INotificationStore>();
+        store.TryAdd(Arg.Any<Notification>()).Returns(false);
+        var subscriber = new NotificationSubscriber(
+            _orderRepository,
+            _userRepository,
+            store,
+            _notificationSender,
+            _logger);
+
+        await subscriber.HandleAsync(
+            new OrderShipped(Guid.NewGuid(), Guid.NewGuid(), OccurredAtUtc),
+            CancellationToken.None);
+
         await _notificationSender.Received(1)
             .SendAsync(
                 Email,
                 Arg.Is<Notification>(notification => notification.EventType == nameof(OrderShipped)),
                 Arg.Any<CancellationToken>());
+        store.Received(1).TryAdd(Arg.Any<Notification>());
     }
 
     [Fact]
