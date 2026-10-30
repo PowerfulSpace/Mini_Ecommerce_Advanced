@@ -583,7 +583,19 @@ MVP+ не включает:
 - TTL, cleanup и фоновое освобождение резервов отсутствуют; `Created` может
   удерживать `Reserved` неограниченно долго.
 - `PaymentAttempt` и `CheckoutAttempt` не очищаются автоматически.
-- Уведомления, промо, скидки, купоны и налоги не реализованы.
+- M9 (уведомления) — этап 21, вне MVP+: `NotificationSubscriber`
+  (`IOutboxSubscriber`) пишет в `InMemoryNotificationStore` (singleton); реальная
+  отправка (SMTP/push) не реализована. Production store — in-memory заглушка +
+  лог; при рестарте уведомления теряются. Cleanup/TTL нет.
+- Уведомления: `OrderPlaced`, `OrderShipped`, `OrderDelivered`, `OrderCancelled`,
+  `OrderReturned`, `PaymentConfirmed`, `PaymentRefunded`; `OrderPaid` намеренно не
+  уведомляется (дубль `PaymentConfirmed`), `StockAdjusted`/`ProductDeactivated` —
+  admin-события, не уведомляются.
+- Уведомления: дедупликация по natural key (`EventType`, `EntityId`,
+  `OccurredAtUtc`); `EntityId` — `OrderId` для order-событий, `PaymentId` для
+  payment; для payment-событий `UserId` — lookup `Order.UserId` по `OrderId`;
+  заказ не найден → `LogWarning`, уведомление пропускается.
+- Промо, скидки, купоны и налоги не реализованы.
 - Частичный возврат после доставки не поддерживается.
 - Replay checkout: повторный checkout возвращает сохранённый `ResponsePayload`
   (для попыток, созданных начиная с этапа 19, он содержит `paymentId` и

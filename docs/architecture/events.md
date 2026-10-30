@@ -5,7 +5,7 @@
 Документ описывает доменные события MVP+ Mini E-commerce, момент их публикации
 и обработку.
 
-События используются для аудита и будущих уведомлений. Они не являются
+События используются для аудита и уведомлений (этап 21; см. §10). Они не являются
 механизмом выполнения платежей, резервов, отмены или возврата. Эти операции
 выполняются в основной транзакции и не должны зависеть от асинхронных
 handler'ов.
@@ -160,7 +160,7 @@ at-most-once. При сбое audit handler'а аудит может отсут�
 - нет фонового восстановления потерянных audit-записей;
 - нет цепочек событий;
 - нет API чтения событий;
-- нет уведомлений;
+- уведомления реализованы как этап 21 (см. §10);
 - аудит работает at-most-once.
 
 Outbox введён как этап 20; см. [ADR-011: Outbox](../adr/ADR-011-outbox.md).
@@ -182,3 +182,13 @@ audit handler. `OutboxDispatcher` опрашивает очередь кажду
 сообщений и делает до 5 попыток с backoff 1/2/4/8/16 секунд. При
 `Attempts >= 5` сообщение помечается Failed через `ProcessedAtUtc`; cleanup
 обработанных и Failed записей отсутствует.
+
+## 10. Уведомления
+
+С этапа 21 `NotificationSubscriber` (`IOutboxSubscriber`) — первый внешний
+подписчик outbox; пишет в `InMemoryNotificationStore` (singleton). События:
+`OrderPlaced`, `OrderShipped`, `OrderDelivered`, `OrderCancelled`,
+`OrderReturned`, `PaymentConfirmed`, `PaymentRefunded`; `OrderPaid`,
+`StockAdjusted`, `ProductDeactivated` — не уведомляются. At-least-once (outbox),
+дедупликация по (`EventType`, `EntityId`, `OccurredAtUtc`). Реальная отправка —
+отдельный этап. См. `DECISIONS.md` §13.
