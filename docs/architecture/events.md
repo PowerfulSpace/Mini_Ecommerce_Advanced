@@ -186,9 +186,14 @@ audit handler. `OutboxDispatcher` опрашивает очередь кажду
 ## 10. Уведомления
 
 С этапа 21 `NotificationSubscriber` (`IOutboxSubscriber`) — первый внешний
-подписчик outbox; пишет в `InMemoryNotificationStore` (singleton). События:
-`OrderPlaced`, `OrderShipped`, `OrderDelivered`, `OrderCancelled`,
+подписчик outbox. Уведомления: `INotificationSender` — mock (лог) по умолчанию,
+SMTP при `SmtpOptions.Enabled = true`; `SendAsync → TryAdd`; at-least-once,
+dedupe best-effort; SMTP failure → retry 5 → Failed; реальный SMTP не
+проверялся (нет сервера). См. `DECISIONS.md` §13.
+
+События: `OrderPlaced`, `OrderShipped`, `OrderDelivered`, `OrderCancelled`,
 `OrderReturned`, `PaymentConfirmed`, `PaymentRefunded`; `OrderPaid`,
-`StockAdjusted`, `ProductDeactivated` — не уведомляются. At-least-once (outbox),
-дедупликация по (`EventType`, `EntityId`, `OccurredAtUtc`). Реальная отправка —
-отдельный этап. См. `DECISIONS.md` §13.
+`StockAdjusted`, `ProductDeactivated` — не уведомляются. `InMemoryNotificationStore`
+— только дедупликация по (`EventType`, `EntityId`, `OccurredAtUtc`); email
+резолвится через `IUserRepository.GetEmailAsync`, при отсутствии — `LogWarning`
+и пропуск.

@@ -584,9 +584,9 @@ MVP+ не включает:
   удерживать `Reserved` неограниченно долго.
 - `PaymentAttempt` и `CheckoutAttempt` не очищаются автоматически.
 - M9 (уведомления) — этап 21, вне MVP+: `NotificationSubscriber`
-  (`IOutboxSubscriber`) пишет в `InMemoryNotificationStore` (singleton); реальная
-  отправка (SMTP/push) не реализована. Production store — in-memory заглушка +
-  лог; при рестарте уведомления теряются. Cleanup/TTL нет.
+  (`IOutboxSubscriber`) резолвит email через `IUserRepository.GetEmailAsync` и
+  отправляет через `INotificationSender`; `InMemoryNotificationStore` — только
+  дедупликация. Cleanup/TTL нет.
 - Уведомления: `OrderPlaced`, `OrderShipped`, `OrderDelivered`, `OrderCancelled`,
   `OrderReturned`, `PaymentConfirmed`, `PaymentRefunded`; `OrderPaid` намеренно не
   уведомляется (дубль `PaymentConfirmed`), `StockAdjusted`/`ProductDeactivated` —
@@ -595,6 +595,21 @@ MVP+ не включает:
   `OccurredAtUtc`); `EntityId` — `OrderId` для order-событий, `PaymentId` для
   payment; для payment-событий `UserId` — lookup `Order.UserId` по `OrderId`;
   заказ не найден → `LogWarning`, уведомление пропускается.
+- Реальная отправка уведомлений (этап 22, вне MVP+, одобрено):
+  `INotificationSender` — `MockNotificationSender` (default, лог,
+  `SmtpOptions.Enabled = false`) или `SmtpNotificationSender`
+  (`System.Net.Mail.SmtpClient`, `SendMailAsync`, `Enabled = true`).
+  `SmtpOptions` — `appsettings.Development.json` (gitignore); `.example.json` —
+  `Enabled: false`. Реальный SMTP не проверялся (нет сервера); MailKit не
+  вводился.
+- Уведомления: `SendAsync → TryAdd` (дедупликация после успешной отправки);
+  SMTP failure → `OutboxDispatcher` retry 5 с backoff, затем Failed; при сбое
+  между `SendAsync` и `TryAdd` возможен повторный email (at-least-once, dedupe
+  best-effort); после рестарта in-memory dedupe теряется — дубликаты возможны.
+- `NotificationSubscriber` резолвит email через `IUserRepository.GetEmailAsync`;
+  при отсутствии пользователя/email — `LogWarning`, пропуск.
+  `MockNotificationSender` не пишет в store; `InMemoryNotificationStore` — только
+  дедупликация.
 - Промо, скидки, купоны и налоги не реализованы.
 - Частичный возврат после доставки не поддерживается.
 - Replay checkout: повторный checkout возвращает сохранённый `ResponsePayload`

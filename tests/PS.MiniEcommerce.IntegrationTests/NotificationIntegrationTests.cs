@@ -44,26 +44,30 @@ public class NotificationIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task Checkout_CreatesOrderPlacedNotification()
     {
-        var store = Start();
+        var (sender, store) = Start();
+        var testSender = Assert.IsType<TestNotificationSender>(sender);
 
         var order = await CreateOrderAsync();
 
-        var notification = await WaitForNotificationAsync(store, nameof(OrderPlaced));
+        var sent = await WaitForNotificationAsync(testSender, nameof(OrderPlaced));
 
-        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), notification.UserId);
-        Assert.Equal(order.OrderId, notification.EntityId);
-        Assert.Equal(order.OrderId, notification.OrderId);
-        Assert.Equal(order.TotalAmount, notification.Amount);
+        Assert.Equal(SeedData.AliceEmail, sent.Email);
+        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), sent.Notification.UserId);
+        Assert.Equal(order.OrderId, sent.Notification.EntityId);
+        Assert.Equal(order.OrderId, sent.Notification.OrderId);
+        Assert.Equal(order.TotalAmount, sent.Notification.Amount);
+        Assert.Contains(store.GetAll(), notification => notification.EventType == nameof(OrderPlaced));
     }
 
     [Fact]
     public async Task Checkout_DoesNotDuplicateAuditLogWithNotificationSubscriber()
     {
-        var store = Start();
+        var (sender, store) = Start();
+        var testSender = Assert.IsType<TestNotificationSender>(sender);
 
         var order = await CreateOrderAsync();
 
-        await WaitForNotificationAsync(store, nameof(OrderPlaced));
+        await WaitForNotificationAsync(testSender, nameof(OrderPlaced));
         await WaitUntilAsync(
             async () => await CountAuditLogsAsync(nameof(OrderPlaced), order.OrderId) == 1,
             "OrderPlaced audit log was not written exactly once.");
@@ -74,30 +78,34 @@ public class NotificationIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task Confirm_CreatesPaymentConfirmedNotification()
     {
-        var store = Start();
+        var (sender, store) = Start();
+        var testSender = Assert.IsType<TestNotificationSender>(sender);
         var order = await CreateOrderAsync();
 
         var response = await ConfirmAsync(order.PaymentId, "notif-confirm-1");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var notification = await WaitForNotificationAsync(store, nameof(PaymentConfirmed));
+        var sent = await WaitForNotificationAsync(testSender, nameof(PaymentConfirmed));
 
-        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), notification.UserId);
-        Assert.Equal(order.PaymentId, notification.EntityId);
-        Assert.Equal(order.OrderId, notification.OrderId);
-        Assert.Equal(order.TotalAmount, notification.Amount);
+        Assert.Equal(SeedData.AliceEmail, sent.Email);
+        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), sent.Notification.UserId);
+        Assert.Equal(order.PaymentId, sent.Notification.EntityId);
+        Assert.Equal(order.OrderId, sent.Notification.OrderId);
+        Assert.Equal(order.TotalAmount, sent.Notification.Amount);
+        Assert.Contains(store.GetAll(), notification => notification.EventType == nameof(PaymentConfirmed));
     }
 
     [Fact]
     public async Task OrderPaid_IsNotNotifiedButAudited()
     {
-        var store = Start();
+        var (sender, store) = Start();
+        var testSender = Assert.IsType<TestNotificationSender>(sender);
         var order = await CreateOrderAsync();
 
         var response = await ConfirmAsync(order.PaymentId, "notif-order-paid-1");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        await WaitForNotificationAsync(store, nameof(PaymentConfirmed));
+        await WaitForNotificationAsync(testSender, nameof(PaymentConfirmed));
         await WaitUntilAsync(
             async () => await IsProcessedAsync(typeof(OrderPaid).FullName!),
             "OrderPaid outbox message was not processed.");
@@ -105,6 +113,7 @@ public class NotificationIntegrationTests : IAsyncLifetime
             async () => await CountAuditLogsAsync(nameof(OrderPaid), order.OrderId) == 1,
             "OrderPaid audit log was not written.");
 
+        Assert.False(testSender.Contains<OrderPaid>());
         Assert.DoesNotContain(store.GetAll(), notification => notification.EventType == nameof(OrderPaid));
         Assert.True(await CountAuditLogsAsync(nameof(OrderPaid), order.OrderId) == 1);
     }
@@ -112,60 +121,68 @@ public class NotificationIntegrationTests : IAsyncLifetime
     [Fact]
     public async Task AdminShipDeliverReturn_CreatesOrderNotifications()
     {
-        var store = Start();
+        var (sender, store) = Start();
+        var testSender = Assert.IsType<TestNotificationSender>(sender);
         var order = await CreateOrderAsync();
         var confirm = await ConfirmAsync(order.PaymentId, "notif-ship-confirm-1");
         Assert.Equal(HttpStatusCode.OK, confirm.StatusCode);
-        await WaitForNotificationAsync(store, nameof(PaymentConfirmed));
+        await WaitForNotificationAsync(testSender, nameof(PaymentConfirmed));
 
         var ship = await SendAdminAsync(HttpMethod.Post, $"/api/admin/orders/{order.OrderId}/ship");
         Assert.Equal(HttpStatusCode.OK, ship.StatusCode);
-        var shipped = await WaitForNotificationAsync(store, nameof(OrderShipped));
-        Assert.Equal(order.OrderId, shipped.EntityId);
-        Assert.Equal(order.OrderId, shipped.OrderId);
-        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), shipped.UserId);
+        var shipped = await WaitForNotificationAsync(testSender, nameof(OrderShipped));
+        Assert.Equal(SeedData.AliceEmail, shipped.Email);
+        Assert.Equal(order.OrderId, shipped.Notification.EntityId);
+        Assert.Equal(order.OrderId, shipped.Notification.OrderId);
+        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), shipped.Notification.UserId);
 
         var deliver = await SendAdminAsync(HttpMethod.Post, $"/api/admin/orders/{order.OrderId}/deliver");
         Assert.Equal(HttpStatusCode.OK, deliver.StatusCode);
-        var delivered = await WaitForNotificationAsync(store, nameof(OrderDelivered));
-        Assert.Equal(order.OrderId, delivered.EntityId);
-        Assert.Equal(order.OrderId, delivered.OrderId);
-        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), delivered.UserId);
+        var delivered = await WaitForNotificationAsync(testSender, nameof(OrderDelivered));
+        Assert.Equal(SeedData.AliceEmail, delivered.Email);
+        Assert.Equal(order.OrderId, delivered.Notification.EntityId);
+        Assert.Equal(order.OrderId, delivered.Notification.OrderId);
+        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), delivered.Notification.UserId);
 
         var returnResponse = await SendAdminAsync(HttpMethod.Post, $"/api/admin/orders/{order.OrderId}/return");
         Assert.Equal(HttpStatusCode.OK, returnResponse.StatusCode);
-        var returned = await WaitForNotificationAsync(store, nameof(OrderReturned));
-        Assert.Equal(order.OrderId, returned.EntityId);
-        Assert.Equal(order.OrderId, returned.OrderId);
-        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), returned.UserId);
+        var returned = await WaitForNotificationAsync(testSender, nameof(OrderReturned));
+        Assert.Equal(SeedData.AliceEmail, returned.Email);
+        Assert.Equal(order.OrderId, returned.Notification.EntityId);
+        Assert.Equal(order.OrderId, returned.Notification.OrderId);
+        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), returned.Notification.UserId);
 
-        var refunded = await WaitForNotificationAsync(store, nameof(PaymentRefunded));
-        Assert.Equal(order.PaymentId, refunded.EntityId);
-        Assert.Equal(order.OrderId, refunded.OrderId);
-        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), refunded.UserId);
-        Assert.Equal(order.TotalAmount, refunded.Amount);
+        var refunded = await WaitForNotificationAsync(testSender, nameof(PaymentRefunded));
+        Assert.Equal(SeedData.AliceEmail, refunded.Email);
+        Assert.Equal(order.PaymentId, refunded.Notification.EntityId);
+        Assert.Equal(order.OrderId, refunded.Notification.OrderId);
+        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), refunded.Notification.UserId);
+        Assert.Equal(order.TotalAmount, refunded.Notification.Amount);
     }
 
     [Fact]
     public async Task FullCancel_CreatesOrderCancelledNotification()
     {
-        var store = Start();
+        var (sender, store) = Start();
+        var testSender = Assert.IsType<TestNotificationSender>(sender);
         var order = await CreateOrderAsync();
 
         var response = await CancelAsync(order.OrderId, order.OrderETag);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var notification = await WaitForNotificationAsync(store, nameof(OrderCancelled));
-        Assert.Equal(order.OrderId, notification.EntityId);
-        Assert.Equal(order.OrderId, notification.OrderId);
-        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), notification.UserId);
-        Assert.Contains("full cancellation: True", notification.Message);
+        var sent = await WaitForNotificationAsync(testSender, nameof(OrderCancelled));
+        Assert.Equal(SeedData.AliceEmail, sent.Email);
+        Assert.Equal(order.OrderId, sent.Notification.EntityId);
+        Assert.Equal(order.OrderId, sent.Notification.OrderId);
+        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), sent.Notification.UserId);
+        Assert.Contains("full cancellation: True", sent.Notification.Message);
     }
 
     [Fact]
     public async Task PartialCancel_CreatesOrderCancelledNotification()
     {
-        var store = Start();
+        var (sender, store) = Start();
+        var testSender = Assert.IsType<TestNotificationSender>(sender);
         var order = await CreateOrderAsync(quantity: 2);
         var orderItemId = await GetOrderItemIdAsync(order.OrderId);
 
@@ -175,35 +192,39 @@ public class NotificationIntegrationTests : IAsyncLifetime
             new { items = new[] { new { orderItemId, quantity = 1 } } });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var notification = await WaitForNotificationAsync(store, nameof(OrderCancelled));
-        Assert.Equal(order.OrderId, notification.EntityId);
-        Assert.Equal(order.OrderId, notification.OrderId);
-        Assert.Contains("full cancellation: False", notification.Message);
+        var sent = await WaitForNotificationAsync(testSender, nameof(OrderCancelled));
+        Assert.Equal(SeedData.AliceEmail, sent.Email);
+        Assert.Equal(order.OrderId, sent.Notification.EntityId);
+        Assert.Equal(order.OrderId, sent.Notification.OrderId);
+        Assert.Contains("full cancellation: False", sent.Notification.Message);
     }
 
     [Fact]
     public async Task AdminRefund_CreatesPaymentRefundedNotification()
     {
-        var store = Start();
+        var (sender, store) = Start();
+        var testSender = Assert.IsType<TestNotificationSender>(sender);
         var order = await CreateOrderAsync();
         var confirm = await ConfirmAsync(order.PaymentId, "notif-refund-confirm-1");
         Assert.Equal(HttpStatusCode.OK, confirm.StatusCode);
-        await WaitForNotificationAsync(store, nameof(PaymentConfirmed));
+        await WaitForNotificationAsync(testSender, nameof(PaymentConfirmed));
 
         var response = await RefundAsync(order.PaymentId, 5m, "notif-refund-1");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var notification = await WaitForNotificationAsync(store, nameof(PaymentRefunded));
-        Assert.Equal(order.PaymentId, notification.EntityId);
-        Assert.Equal(order.OrderId, notification.OrderId);
-        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), notification.UserId);
-        Assert.Equal(5m, notification.Amount);
+        var sent = await WaitForNotificationAsync(testSender, nameof(PaymentRefunded));
+        Assert.Equal(SeedData.AliceEmail, sent.Email);
+        Assert.Equal(order.PaymentId, sent.Notification.EntityId);
+        Assert.Equal(order.OrderId, sent.Notification.OrderId);
+        Assert.Equal(await GetUserIdAsync(SeedData.AliceEmail), sent.Notification.UserId);
+        Assert.Equal(5m, sent.Notification.Amount);
     }
 
     [Fact]
     public async Task AdminStockAndDeactivate_DoNotCreateNotifications()
     {
-        var store = Start();
+        var (sender, store) = Start();
+        var testSender = Assert.IsType<TestNotificationSender>(sender);
         var productId = await GetActiveProductIdAsync();
 
         var stock = await SendAdminAsync(
@@ -224,13 +245,15 @@ public class NotificationIntegrationTests : IAsyncLifetime
             async () => await IsProcessedAsync(typeof(ProductDeactivated).FullName!),
             "ProductDeactivated outbox message was not processed.");
 
+        Assert.Equal(0, testSender.Count);
         Assert.Empty(store.GetAll());
     }
 
     [Fact]
     public async Task NotificationSubscriber_DeduplicatesRepeatedDelivery()
     {
-        var store = Start();
+        var (sender, store) = Start();
+        var testSender = Assert.IsType<TestNotificationSender>(sender);
         var userId = await GetUserIdAsync(SeedData.AliceEmail);
         var domainEvent = new OrderPlaced(
             Guid.NewGuid(),
@@ -248,20 +271,97 @@ public class NotificationIntegrationTests : IAsyncLifetime
         await subscriber.HandleAsync(domainEvent, CancellationToken.None);
         await subscriber.HandleAsync(domainEvent, CancellationToken.None);
 
+        Assert.Equal(2, testSender.Count);
+        Assert.All(
+            testSender.GetAll(),
+            entry => Assert.Equal(SeedData.AliceEmail, entry.Email));
+
         var notification = Assert.Single(store.GetAll());
         Assert.Equal(nameof(OrderPlaced), notification.EventType);
         Assert.Equal(domainEvent.OrderId, notification.EntityId);
         Assert.Equal(domainEvent.OccurredAtUtc, notification.OccurredAtUtc);
     }
 
-    private TestNotificationStore Start()
+    [Fact]
+    public async Task SubscriberFailure_RetriesNotificationAndStoresAfterSuccess()
+    {
+        var throwingSender = new ThrowingNotificationSender(failuresBeforeSuccess: 2);
+        var (_, store) = Start(throwingSender);
+        var order = await CreateOrderAsync();
+
+        await WaitUntilAsync(
+            async () => await IsProcessedAsync(typeof(OrderPlaced).FullName!),
+            "OrderPlaced was not processed after notification retries.",
+            timeoutMs: 30000);
+
+        Assert.Equal(3, throwingSender.Attempts);
+
+        var notification = Assert.Single(store.GetAll());
+        Assert.Equal(nameof(OrderPlaced), notification.EventType);
+        Assert.Equal(order.OrderId, notification.EntityId);
+
+        await using var context = CreateContext();
+        var message = await context.OutboxMessages
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.EventType == typeof(OrderPlaced).FullName);
+
+        Assert.Equal(2, message.Attempts);
+        Assert.NotNull(message.ProcessedAtUtc);
+        Assert.Contains("Simulated notification sender failure", message.LastError);
+    }
+
+    [Fact]
+    public async Task SubscriberFailure_ExhaustsRetriesAndDoesNotStoreNotification()
+    {
+        var throwingSender = new ThrowingNotificationSender(failuresBeforeSuccess: 100);
+        var (_, store) = Start(throwingSender);
+        await CreateOrderAsync();
+
+        await WaitUntilAsync(
+            () => Task.FromResult(throwingSender.Attempts >= 1),
+            "Notification sender was not called.",
+            timeoutMs: 15000);
+
+        Assert.Empty(store.GetAll());
+
+        await WaitUntilAsync(
+            async () =>
+            {
+                await using var context = CreateContext();
+                return await context.OutboxMessages
+                    .AnyAsync(candidate =>
+                        candidate.EventType == typeof(OrderPlaced).FullName
+                        && candidate.Attempts >= 5);
+            },
+            "Notification was not marked failed after max attempts.",
+            timeoutMs: 70000);
+
+        Assert.Equal(5, throwingSender.Attempts);
+        Assert.Empty(store.GetAll());
+
+        await using var verification = CreateContext();
+        var failed = await verification.OutboxMessages
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.EventType == typeof(OrderPlaced).FullName);
+
+        Assert.Equal(5, failed.Attempts);
+        Assert.NotNull(failed.ProcessedAtUtc);
+        Assert.Contains("Simulated notification sender failure", failed.LastError);
+    }
+
+    private (INotificationSender Sender, TestNotificationStore Store) Start(
+        INotificationSender? sender = null)
     {
         var store = new TestNotificationStore();
+        var notificationSender = sender ?? new TestNotificationSender();
 
         _factory = new CustomWebApplicationFactory(
             _fixture.ConnectionString,
             configureTestServices: services =>
             {
+                services.RemoveAll<INotificationSender>();
+                services.AddScoped<INotificationSender>(_ => notificationSender);
+
                 services.RemoveAll<INotificationStore>();
                 services.AddSingleton<INotificationStore>(store);
             },
@@ -269,7 +369,7 @@ public class NotificationIntegrationTests : IAsyncLifetime
 
         _client = _factory.CreateClient();
 
-        return store;
+        return (notificationSender, store);
     }
 
     private async Task<CreatedOrder> CreateOrderAsync(int quantity = 1)
@@ -410,22 +510,24 @@ public class NotificationIntegrationTests : IAsyncLifetime
                 message.EventType == eventType && message.ProcessedAtUtc != null);
     }
 
-    private static async Task<Notification> WaitForNotificationAsync(
-        TestNotificationStore store,
+    private static async Task<SentNotification> WaitForNotificationAsync(
+        TestNotificationSender sender,
         string eventType)
     {
-        Notification? notification = null;
+        SentNotification? sent = null;
 
         await WaitUntilAsync(
             () =>
             {
-                notification = store.GetAll()
-                    .FirstOrDefault(candidate => candidate.EventType == eventType);
-                return Task.FromResult(notification is not null);
+                sent = sender.GetAll()
+                    .Where(entry => entry.Notification.EventType == eventType)
+                    .Select(entry => new SentNotification(entry.Email, entry.Notification))
+                    .FirstOrDefault();
+                return Task.FromResult(sent is not null);
             },
-            $"Notification {eventType} was not stored.");
+            $"Notification {eventType} was not sent.");
 
-        return notification!;
+        return sent!;
     }
 
     private static async Task WaitUntilAsync(
@@ -458,6 +560,8 @@ public class NotificationIntegrationTests : IAsyncLifetime
         Guid PaymentId,
         decimal TotalAmount,
         string OrderETag);
+
+    private sealed record SentNotification(string Email, Notification Notification);
 
     private sealed record OrderResponse(Guid Id, decimal TotalAmount, Guid? PaymentId);
 }

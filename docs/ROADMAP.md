@@ -947,8 +947,8 @@ M9, M10, M11, M14 — вне объёма.
 
 Вне MVP+ (M1–M14):
 
-- M9 — уведомления — реализован как этап 21 (вне MVP+); см.
-  [events.md](architecture/events.md) §10, `DECISIONS.md` §13.
+- M9 — уведомления — реализован как этап 21; реальная отправка (SMTP) — этап 22
+  (вне MVP+); см. [events.md](architecture/events.md) §10, `DECISIONS.md` §13.
 - M10 — промо, скидки, купоны и налоги.
 - M11 — реальная JWT/OAuth-аутентификация.
 - M14 — reconciliation платежей.

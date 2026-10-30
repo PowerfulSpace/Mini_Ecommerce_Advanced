@@ -6,9 +6,10 @@ MVP (этапы 0–11) завершён. MVP+ (M1–M8, M12, M13; этапы 12
 соответствует MVP+. M9 реализован как этап 21 (вне MVP+); M10, M11, M14 — вне
 объёма.
 
-M9 (уведомления) — реализован как этап 21 (вне MVP+): `NotificationSubscriber` +
-`InMemoryNotificationStore`; реальная отправка (SMTP/push) — отдельный этап. См.
-`docs/architecture/events.md`, `docs/DECISIONS.md` §13.
+M9 (уведомления) — реализован как этап 21 + реальная отправка (этап 22) (вне
+MVP+): `NotificationSubscriber` + `INotificationSender` (mock/SMTP) +
+`InMemoryNotificationStore` для дедупликации. См. `docs/architecture/events.md`,
+`docs/DECISIONS.md` §13.
 
 Этот файл не описывает текущий MVP+ и не является списком задач. Он фиксирует,
 что осталось за его границей и какие направления имеют смысл в следующем
