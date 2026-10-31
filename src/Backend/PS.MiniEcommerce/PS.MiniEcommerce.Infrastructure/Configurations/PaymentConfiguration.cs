@@ -69,6 +69,10 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
         builder.HasIndex(payment => payment.OrderId)
             .IsUnique();
 
+        builder.HasIndex(payment => payment.ProviderPaymentId)
+            .IsUnique()
+            .HasFilter("[Provider] = 'stripe'");
+
         builder.HasMany(payment => payment.Refunds)
             .WithOne()
             .HasForeignKey(refund => refund.PaymentId)

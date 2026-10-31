@@ -10,7 +10,8 @@ public sealed record PaymentDto(
     string Status,
     DateTime CreatedAtUtc,
     DateTime? ConfirmedAtUtc,
-    DateTime? RefundedAtUtc);
+    DateTime? RefundedAtUtc,
+    string? ClientSecret);
 
 public static class PaymentDtoMapping
 {
@@ -22,5 +23,6 @@ public static class PaymentDtoMapping
         payment.Status.ToString(),
         payment.CreatedAtUtc,
         payment.ConfirmedAtUtc,
-        payment.RefundedAtUtc);
+        payment.RefundedAtUtc,
+        null);
 }

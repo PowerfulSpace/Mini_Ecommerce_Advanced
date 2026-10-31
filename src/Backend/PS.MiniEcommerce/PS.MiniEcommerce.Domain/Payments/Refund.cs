@@ -16,6 +16,8 @@ public class Refund
 
     public string? Reason { get; private set; }
 
+    public string? ProviderRefundId { get; private set; }
+
     private Refund()
     {
     }
@@ -46,5 +48,22 @@ public class Refund
         }
 
         return new Refund(Guid.NewGuid(), paymentId, amount, reason, utcNow);
+    }
+
+    public void SetProviderRefundId(string providerRefundId)
+    {
+        if (string.IsNullOrWhiteSpace(providerRefundId))
+        {
+            throw new DomainValidationException("Provider refund id must not be empty.");
+        }
+
+        if (ProviderRefundId is not null)
+        {
+            throw new DomainConflictException(
+                "Provider refund id has already been set.",
+                "provider_refund_id_already_set");
+        }
+
+        ProviderRefundId = providerRefundId;
     }
 }

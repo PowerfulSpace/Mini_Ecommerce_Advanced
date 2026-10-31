@@ -59,6 +59,23 @@ public class Payment
         return new Payment(Guid.NewGuid(), orderId, amount, utcNow);
     }
 
+    public void SetProviderPaymentId(string providerPaymentId)
+    {
+        if (string.IsNullOrWhiteSpace(providerPaymentId))
+        {
+            throw new DomainValidationException("Provider payment id must not be empty.");
+        }
+
+        if (ProviderPaymentId != "mock")
+        {
+            throw new DomainConflictException(
+                "Provider payment id has already been set.",
+                "provider_payment_id_already_set");
+        }
+
+        ProviderPaymentId = providerPaymentId;
+    }
+
     public void MarkConfirmed(DateTime utcNow)
     {
         if (Status != PaymentStatus.Pending)

@@ -33,5 +33,13 @@ public class RefundConfiguration : IEntityTypeConfiguration<Refund>
         builder.Property(refund => refund.Reason)
             .IsRequired(false)
             .HasMaxLength(500);
+
+        builder.Property(refund => refund.ProviderRefundId)
+            .IsRequired(false)
+            .HasMaxLength(200);
+
+        builder.HasIndex(refund => refund.ProviderRefundId)
+            .IsUnique()
+            .HasFilter("[ProviderRefundId] IS NOT NULL");
     }
 }

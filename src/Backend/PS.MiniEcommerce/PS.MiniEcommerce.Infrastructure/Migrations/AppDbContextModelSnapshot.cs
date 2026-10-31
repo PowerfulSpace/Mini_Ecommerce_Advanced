@@ -244,6 +244,10 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                     b.HasIndex("OrderId")
                         .IsUnique();
 
+                    b.HasIndex("ProviderPaymentId")
+                        .IsUnique()
+                        .HasFilter("[Provider] = 'stripe'");
+
                     b.ToTable("Payments", null, t =>
                         {
                             t.HasCheckConstraint("CK_Payments_Amount_NonNegative", "[Amount] >= 0");
@@ -267,6 +271,10 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                     b.Property<Guid>("PaymentId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("ProviderRefundId")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
                     b.Property<string>("Reason")
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
@@ -277,6 +285,10 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("PaymentId");
+
+                    b.HasIndex("ProviderRefundId")
+                        .IsUnique()
+                        .HasFilter("[ProviderRefundId] IS NOT NULL");
 
                     b.ToTable("Refunds", null, t =>
                         {
@@ -554,6 +566,34 @@ namespace PS.MiniEcommerce.Infrastructure.Migrations
                         {
                             t.HasCheckConstraint("CK_PaymentAttempts_Status_Valid", "[Status] IN ('InProgress', 'Completed')");
                         });
+                });
+
+            modelBuilder.Entity("PS.MiniEcommerce.Infrastructure.Persistence.ProcessedStripeEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("EventId")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<DateTime>("ProcessedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EventId")
+                        .IsUnique();
+
+                    b.HasIndex("ProcessedAtUtc");
+
+                    b.ToTable("ProcessedStripeEvents", (string)null);
                 });
 
             modelBuilder.Entity("PS.MiniEcommerce.Domain.Cart", b =>

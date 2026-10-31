@@ -35,6 +35,40 @@ public class PaymentTests
     }
 
     [Fact]
+    public void SetProviderPaymentId_FromMock_SetsProviderPaymentId()
+    {
+        var payment = Payment.Create(OrderId, Money.FromDecimal(100m), FixedUtcNow);
+
+        payment.SetProviderPaymentId("pi_123");
+
+        Assert.Equal("pi_123", payment.ProviderPaymentId);
+    }
+
+    [Fact]
+    public void SetProviderPaymentId_WhenAlreadySet_ThrowsProviderPaymentIdAlreadySet()
+    {
+        var payment = Payment.Create(OrderId, Money.FromDecimal(100m), FixedUtcNow);
+        payment.SetProviderPaymentId("pi_123");
+
+        var exception = Assert.Throws<DomainConflictException>(
+            () => payment.SetProviderPaymentId("pi_456"));
+
+        Assert.Equal("provider_payment_id_already_set", exception.Code);
+        Assert.Equal("pi_123", payment.ProviderPaymentId);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void SetProviderPaymentId_WithEmptyValue_ThrowsDomainValidationException(string providerPaymentId)
+    {
+        var payment = Payment.Create(OrderId, Money.FromDecimal(100m), FixedUtcNow);
+
+        Assert.Throws<DomainValidationException>(
+            () => payment.SetProviderPaymentId(providerPaymentId));
+    }
+
+    [Fact]
     public void MarkConfirmed_FromPending_SetsStatusAndTimestamp()
     {
         var payment = Payment.Create(OrderId, Money.FromDecimal(100m), FixedUtcNow);

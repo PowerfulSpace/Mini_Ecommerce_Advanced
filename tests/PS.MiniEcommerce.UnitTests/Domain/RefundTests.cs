@@ -19,6 +19,7 @@ public class RefundTests
         Assert.Equal(25m, refund.Amount.Amount);
         Assert.Equal("damaged", refund.Reason);
         Assert.Equal(FixedUtcNow, refund.RefundedAtUtc);
+        Assert.Null(refund.ProviderRefundId);
     }
 
     [Fact]
@@ -43,5 +44,39 @@ public class RefundTests
     {
         Assert.Throws<DomainValidationException>(
             () => Refund.Create(PaymentId, Money.FromDecimal(25m), new string('a', 501), FixedUtcNow));
+    }
+
+    [Fact]
+    public void SetProviderRefundId_SetsProviderRefundId()
+    {
+        var refund = Refund.Create(PaymentId, Money.FromDecimal(25m), null, FixedUtcNow);
+
+        refund.SetProviderRefundId("re_123");
+
+        Assert.Equal("re_123", refund.ProviderRefundId);
+    }
+
+    [Fact]
+    public void SetProviderRefundId_WhenAlreadySet_ThrowsProviderRefundIdAlreadySet()
+    {
+        var refund = Refund.Create(PaymentId, Money.FromDecimal(25m), null, FixedUtcNow);
+        refund.SetProviderRefundId("re_123");
+
+        var exception = Assert.Throws<DomainConflictException>(
+            () => refund.SetProviderRefundId("re_456"));
+
+        Assert.Equal("provider_refund_id_already_set", exception.Code);
+        Assert.Equal("re_123", refund.ProviderRefundId);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void SetProviderRefundId_WithEmptyValue_ThrowsDomainValidationException(string providerRefundId)
+    {
+        var refund = Refund.Create(PaymentId, Money.FromDecimal(25m), null, FixedUtcNow);
+
+        Assert.Throws<DomainValidationException>(
+            () => refund.SetProviderRefundId(providerRefundId));
     }
 }
