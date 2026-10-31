@@ -8,6 +8,7 @@ using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Checkout;
 using PS.MiniEcommerce.Application.Notifications;
 using PS.MiniEcommerce.Application.Payments;
+using PS.MiniEcommerce.Application.Webhooks;
 using PS.MiniEcommerce.Infrastructure.Checkout;
 using PS.MiniEcommerce.Infrastructure.Notifications;
 using PS.MiniEcommerce.Infrastructure.Outbox;
@@ -49,6 +50,8 @@ public static class DependencyInjection
 
         services.AddScoped<IOutboxRepository, OutboxRepository>();
 
+        services.AddScoped<IProcessedStripeEventRepository, ProcessedStripeEventRepository>();
+
         services.AddSingleton<INotificationStore, InMemoryNotificationStore>();
 
         services.Configure<SmtpOptions>(configuration.GetSection("Smtp"));
@@ -83,6 +86,10 @@ public static class DependencyInjection
         services.AddScoped<IPaymentRefundService, PaymentRefundService>();
 
         services.AddScoped<IRefundTransactionExecutor, RefundTransactionExecutor>();
+
+        services.AddScoped<IWebhookTransactionExecutor, WebhookTransactionExecutor>();
+
+        services.AddScoped<IWebhookHandler, WebhookHandler>();
 
         services.AddHostedService<OutboxDispatcher>();
 

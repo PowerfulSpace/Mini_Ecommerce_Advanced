@@ -36,6 +36,17 @@ public class PaymentRepository : IPaymentRepository
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    public Task<Payment?> GetByProviderPaymentIdAsync(
+        string providerPaymentId,
+        CancellationToken cancellationToken)
+    {
+        return _dbContext.Payments
+            .AsTracking()
+            .FirstOrDefaultAsync(
+                payment => payment.ProviderPaymentId == providerPaymentId,
+                cancellationToken);
+    }
+
     public Task UpdateAsync(Payment payment, CancellationToken cancellationToken)
     {
         _dbContext.Payments.Update(payment);
