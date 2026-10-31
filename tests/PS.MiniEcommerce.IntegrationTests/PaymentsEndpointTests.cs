@@ -503,6 +503,7 @@ public class PaymentsEndpointTests : IAsyncLifetime
         Assert.Equal(order.PaymentId, refund.PaymentId);
         Assert.Equal(amount, refund.Amount.Amount);
         Assert.Equal(reason, refund.Reason);
+        Assert.Null(refund.ProviderRefundId);
 
         var attempt = await GetPaymentAttemptAsync("refund-partial-1");
         Assert.NotNull(attempt);
@@ -525,6 +526,44 @@ public class PaymentsEndpointTests : IAsyncLifetime
         Assert.Equal(order.OrderId, payload.RootElement.GetProperty("orderId").GetGuid());
         Assert.Equal(amount, payload.RootElement.GetProperty("amount").GetDecimal());
         Assert.Equal(reason, payload.RootElement.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public async Task Refund_WhenStripeEnabled_SetsMockProviderRefundId()
+    {
+        using var factory = new CustomWebApplicationFactory(
+            _fixture.ConnectionString,
+            configureTestServices: services =>
+            {
+                services.Configure<StripeOptions>(options =>
+                {
+                    options.Enabled = true;
+                    options.WebhookSecret = "whsec_test_secret_123456";
+                });
+            });
+        using var client = factory.CreateClient();
+
+        var order = await CreateOrderAsync(client, Alice, WirelessMouse, quantity: 1);
+        await ConfirmPaymentInDbAsync(order.PaymentId);
+
+        var storedPayment = await GetPaymentAsync(order.PaymentId);
+        Assert.NotNull(storedPayment);
+        Assert.Equal("stripe", storedPayment.Provider);
+
+        var response = await RefundAsync(
+            client,
+            order.PaymentId,
+            5m,
+            "damaged",
+            "refund-stripe-enabled-1");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var stored = await GetPaymentWithRefundsAsync(order.PaymentId);
+        Assert.NotNull(stored);
+        var refund = Assert.Single(stored.Refunds);
+        Assert.NotNull(refund.ProviderRefundId);
+        Assert.StartsWith("re_mock_", refund.ProviderRefundId);
     }
 
     [Fact]
@@ -1081,6 +1120,16 @@ public class PaymentsEndpointTests : IAsyncLifetime
         await using var context = CreateContext();
         context.PaymentAttempts.Add(
             PaymentAttempt.Create(userId, idempotencyKey, fingerprint, utcNow, leaseDuration));
+        await context.SaveChangesAsync();
+    }
+
+    private async Task ConfirmPaymentInDbAsync(Guid paymentId)
+    {
+        await using var context = CreateContext();
+        var payment = await context.Payments
+            .FirstAsync(payment => payment.Id == paymentId);
+
+        payment.MarkConfirmed(DateTime.UtcNow);
         await context.SaveChangesAsync();
     }
 

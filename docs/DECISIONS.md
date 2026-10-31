@@ -46,6 +46,9 @@
   [ADR-011](adr/ADR-011-outbox.md).
 - Платежи и их идемпотентность определены в
   [ADR-008](adr/ADR-008-payments-and-idempotency.md).
+- Stripe-like режим (этап 23, вне MVP+): HMAC-вебхуки, `ProcessedStripeEvents`,
+  двухидейный checkout, `ProviderPaymentId`/`ProviderRefundId`; см.
+  [ADR-012](adr/ADR-012-stripe-like-webhooks.md).
 - Admin API и роль admin определены в
   [ADR-009](adr/ADR-009-admin-api-and-roles.md).
 - `User.Role` — `Customer`/`Admin`, конвертер lowercase, CHECK
@@ -566,6 +569,29 @@ MVP+ не включает:
 - Refund выполняется in-process через `IPaymentRefundService` (домен
   `Payment`/`Refund`); `IPaymentProvider.RefundAsync` в текущем сценарии не
   вызывается. См. `payments.md` §5, `api.md` §3.5.
+- Stripe-like (этап 23, вне MVP+): вебхук `POST /api/webhooks/stripe` проверяет
+  `Stripe-Signature` как HMAC-SHA256 по `{timestamp}.{payload}` с tolerance
+  (по умолчанию 300 секунд); при `Stripe:Enabled = false` endpoint отвечает
+  `200` no-op без проверки. См. [ADR-012](adr/ADR-012-stripe-like-webhooks.md).
+- Stripe-like: идемпотентность события обеспечивает уникальный
+  `ProcessedStripeEvents.EventId`; запись и бизнес-изменение фиксируются в одной
+  транзакции; повторная доставка возвращает `200` без повторных изменений.
+- Stripe-like: checkout двухидейный — основная транзакция создаёт `Pending`
+  платёж, после commit отдельная транзакция выставляет
+  `Provider = Stripe:ProviderName` и `ProviderPaymentId = pi_mock_<guid>`; сбой
+  инициализации не откатывает заказ.
+- Stripe-like: `payment_intent.succeeded` подтверждает платёж под `UPDLOCK`,
+  списывает `Reserved`, переводит заказ в `Paid`, пишет outbox и публикует
+  `PaymentConfirmed`/`OrderPaid` после commit; синхронный confirm при
+  `Enabled = true` возвращает `409 payment_confirm_not_supported`.
+- Stripe-like: `charge.refunded` и `refund.updated` — no-op;
+  `Refund.ProviderRefundId = re_mock_<guid>` выставляется синхронным mock refund
+  для Stripe-like платежа и остаётся `null` для mock. Реальное обновление по
+  `charge.refunded` — этап 24.
+- Stripe.net, реальный провайдер, ClientSecret, reconciliation, retry/порядок
+  доставки вебхуков и разрешение `Failed → Confirmed` — этап 24.
+- AGENTS.md §4 запрещает Stripe без явного одобрения; одобрение Stripe-like
+  режима этапа 23 зафиксировано здесь. AGENTS.md намеренно не менялся.
 - Аудит работает at-most-once: при сбое handler'а audit-запись теряется; outbox
   для audit и retry отсутствуют.
 - Outbox (этап 20): at-least-once для внешних подписчиков (`IOutboxSubscriber`);

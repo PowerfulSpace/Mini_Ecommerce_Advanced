@@ -373,8 +373,8 @@ SQL Server автоматически создаёт и обновляет зн�
 | `OrderId` | `uniqueidentifier` | Обязательно; внешний ключ на `Order`; уникально |
 | `Amount` | `decimal(18,2)` | Обязательно; `>= 0` |
 | `Status` | `nvarchar(20)` | Обязательно; CHECK по статусам |
-| `Provider` | `nvarchar(50)` | Обязательно; `mock` |
-| `ProviderPaymentId` | `nvarchar(200)` | NULL |
+| `Provider` | `nvarchar(50)` | Обязательно; `mock` по умолчанию, `stripe` в Stripe-like режиме |
+| `ProviderPaymentId` | `nvarchar(200)` | NULL; `pi_mock_<guid>` в Stripe-like режиме; уникален при `Provider = 'stripe'` |
 | `RefundedAmount` | `decimal(18,2)` | Обязательно; default 0; `>= 0`; `<= Amount` |
 | `CreatedAtUtc` | `datetime2` | Обязательно; UTC |
 | `ConfirmedAtUtc` | `datetime2` | NULL |
@@ -398,9 +398,14 @@ SQL Server автоматически создаёт и обновляет зн�
   проверяется в приложении.
 - `Status` изменяется только по допустимым переходам; `Refunded` терминален,
   `Failed` допускает retry.
-- `Provider` в MVP+ — `mock`; `ProviderPaymentId` может быть null.
-- `Currency` не хранится: все суммы — USD.
-- См. [ADR-008](../adr/ADR-008-payments-and-idempotency.md).
+- `Provider` в MVP+ — `mock`; `ProviderPaymentId` может быть null. В Stripe-like
+  режиме (этап 23) checkout после commit выставляет `Provider = 'stripe'` и
+  `ProviderPaymentId = pi_mock_<guid>`.
+- Unique index по `ProviderPaymentId` отфильтрован условием
+  `Provider = 'stripe'`: mock-платежи не конфликтуют по значению `mock`.
+- `Currency` не хранится: все суммы — USD; вебхук принимает только `usd`.
+- См. [ADR-008](../adr/ADR-008-payments-and-idempotency.md),
+  [ADR-012](../adr/ADR-012-stripe-like-webhooks.md).
 
 ### 4.9 Refund
 
@@ -413,6 +418,7 @@ SQL Server автоматически создаёт и обновляет зн�
 | `Amount` | `decimal(18,2)` | Обязательно; `> 0` |
 | `RefundedAtUtc` | `datetime2` | Обязательно; UTC |
 | `Reason` | `nvarchar(500)` | NULL |
+| `ProviderRefundId` | `nvarchar(200)` | NULL; `re_mock_<guid>` в Stripe-like режиме |
 
 Требования:
 
@@ -423,7 +429,13 @@ SQL Server автоматически создаёт и обновляет зн�
 - `Payment.Status = Refunded` устанавливается только при полном возврате.
 - Отдельного статуса `PartiallyRefunded` нет.
 - `Refund` не удаляется каскадно вместе с платежом или заказом.
-- См. [ADR-008](../adr/ADR-008-payments-and-idempotency.md).
+- `ProviderRefundId` заполняется синхронным mock refund для Stripe-like
+  платежа (`Payment.Provider = Stripe:ProviderName`) и остаётся `null` для
+  mock-платежа; значение не приходит из вебхука.
+- Unique index по `ProviderRefundId` отфильтрован условием
+  `ProviderRefundId IS NOT NULL`.
+- См. [ADR-008](../adr/ADR-008-payments-and-idempotency.md),
+  [ADR-012](../adr/ADR-012-stripe-like-webhooks.md).
 
 ### 4.10 PaymentAttempt
 
@@ -540,6 +552,29 @@ SQL Server автоматически создаёт и обновляет зн�
 - Cleanup обработанных и Failed записей отсутствует.
 - См. [ADR-011](../adr/ADR-011-outbox.md), [events.md](events.md) §9.
 
+### 4.14 ProcessedStripeEvent
+
+Представляет факт обработки Stripe-like вебхука для идемпотентности.
+
+| Свойство | Предлагаемый тип SQL | Требования |
+|---|---|---|
+| `Id` | `uniqueidentifier` | Первичный ключ; `ValueGeneratedNever` |
+| `EventId` | `nvarchar(200)` | Обязательно; уникально |
+| `Type` | `nvarchar(100)` | Обязательно; тип события провайдера |
+| `ProcessedAtUtc` | `datetime2` | Обязательно; UTC |
+
+Требования:
+
+- Уникальный индекс по `EventId` обеспечивает идемпотентность повторной
+  доставки: повторное событие возвращает `200` без изменений.
+- Запись создаётся в той же транзакции, что и бизнес-изменение
+  (`payment_intent.succeeded`), либо отдельно для подтверждённых no-op событий.
+- Unique violation (`2601`/`2627`) трактуется как уже обработанное событие.
+- Неподдерживаемые типы, а также события, которые не удалось применить,
+  записываются и подтверждаются `200`.
+- Cleanup не выполняется.
+- См. [ADR-012](../adr/ADR-012-stripe-like-webhooks.md).
+
 ## 5. Связи
 
 Предполагаемые связи:
@@ -601,7 +636,10 @@ Payment 0..1 ─── 0..* PaymentAttempt
 | `Payment` | `RefundedAmount >= 0` | Не допускать отрицательного возврата |
 | `Payment` | `RefundedAmount <= Amount` | Не возвращать больше суммы платежа |
 | `Payment` | `Status IN ('Pending', 'Confirmed', 'Failed', 'Refunded')` | Ограничивать статусы платежа |
+| `Payment` | Уникальность `ProviderPaymentId` при `Provider = 'stripe'` | Не допускать повторного provider id; mock не ограничен |
 | `Refund` | `Amount > 0` | Не допускать нулевого или отрицательного refund |
+| `Refund` | Уникальность `ProviderRefundId` при `IS NOT NULL` | Не допускать повторного provider refund id |
+| `ProcessedStripeEvent` | Уникальность `EventId` | Идемпотентность вебхуков |
 | `PaymentAttempt` | Уникальность `(UserId, IdempotencyKey)` | Предотвращать дублирующиеся подтверждения |
 | `PaymentAttempt` | `Status IN ('InProgress', 'Completed')` | Ограничивать состояния попытки |
 | `PaymentAttempt` | `LeaseExpiresAtUtc IS NOT NULL` | Поддерживать восстановление по требованию |
@@ -866,6 +904,13 @@ refund повторно; проигравшие попытки получают 
 11. `AddOutboxLastAttemptAtUtc` (этап 20) — добавляет
     `OutboxMessages.LastAttemptAtUtc` (`datetime2 NULL`); выполняется после
     `AddOutbox`.
+12. `AddStripeProviderIds` (этап 23) — добавляет `Refund.ProviderRefundId`
+    (`nvarchar(200) NULL`) и unique index с фильтром
+    `ProviderRefundId IS NOT NULL`; unique index по
+    `Payment.ProviderPaymentId` с фильтром `Provider = 'stripe'`.
+13. `AddProcessedStripeEvents` (этап 23) — создаёт `ProcessedStripeEvents`
+    (`Id`, `EventId nvarchar(200) UNIQUE`, `Type nvarchar(100)`,
+    `ProcessedAtUtc`); выполняется после `AddStripeProviderIds`.
 
 Порядок миграций должен соответствовать зависимостям внешних ключей. FK
 `Order.PaymentId → Payment` создаётся в `AddPaymentsAndRefunds`. Поле
@@ -884,7 +929,9 @@ refund повторно; проигравшие попытки получают 
   MVP+); см. [ADR-011](../adr/ADR-011-outbox.md).
 - TTL резервов, cleanup и автоматическое освобождение.
 - Reconciliation платежей.
-- Реальный платёжный провайдер, Stripe и вебхуки.
+- Реальный платёжный провайдер, Stripe.net, ClientSecret и реальное обновление
+  refund по `charge.refunded` (этап 24). Stripe-like вебхуки и provider ids
+  реализованы на этапе 23; см. [ADR-012](../adr/ADR-012-stripe-like-webhooks.md).
 - Частичный возврат после доставки.
 - Admin UI и реальная аутентификация.
 

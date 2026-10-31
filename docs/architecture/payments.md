@@ -6,8 +6,11 @@
 архитектуре.
 
 В MVP+ используется mock-провайдер. Реальный платёжный провайдер, Stripe,
-вебхуки и reconciliation не входят в объём. Admin refund доступен только в
-Development через тестовую аутентификацию `X-Test-User: admin`.
+вебхуки и reconciliation не входят в объём. С этапа 23 доступен учебный
+Stripe-like режим (см. §5.1): HMAC-вебхуки, двухидейный checkout и mock
+provider ids; Stripe.net и реальная интеграция остаются вне объёма. Admin
+refund доступен только в Development через тестовую аутентификацию
+`X-Test-User: admin`.
 
 Платёж является частью заказа и не вводит отдельный статус
 `PendingPayment` в `OrderStatus`. Заказ после checkout остаётся в `Created`,
@@ -18,7 +21,8 @@ Development через тестовую аутентификацию `X-Test-Use
 - [ADR-008: Платежи и идемпотентность](../adr/ADR-008-payments-and-idempotency.md);
 - [ADR-004: State machine заказа](../adr/ADR-004-order-state-machine.md);
 - [ADR-005: Резервы стока](../adr/ADR-005-stock-reservations.md);
-- [ADR-009: Admin API и роли](../adr/ADR-009-admin-api-and-roles.md).
+- [ADR-009: Admin API и роли](../adr/ADR-009-admin-api-and-roles.md);
+- [ADR-012: Stripe-like вебхуки](../adr/ADR-012-stripe-like-webhooks.md).
 
 Схема хранения описана в `data-model.md`, §4.8–4.9; `PaymentAttempt` — в §4.10.
 HTTP-контракты — в `api.md`, §2.5, §3.5 и §6.2.
@@ -36,8 +40,9 @@ HTTP-контракты — в `api.md`, §2.5, §3.5 и §6.2.
 - `Amount` (`Money`);
 - `RefundedAmount` (`Money`, накопительно);
 - `Status`;
-- `Provider` (`mock`);
-- `ProviderPaymentId` (`mock`);
+- `Provider` (`mock` по умолчанию; `stripe` в Stripe-like режиме);
+- `ProviderPaymentId` (`mock` по умолчанию; `pi_mock_<guid>` в Stripe-like
+  режиме);
 - `CreatedAtUtc`;
 - `ConfirmedAtUtc?`;
 - `RefundedAtUtc?`;
@@ -64,7 +69,9 @@ HTTP-контракты — в `api.md`, §2.5, §3.5 и §6.2.
 - `PaymentId`;
 - `Amount` (`Money`, `> 0`);
 - `RefundedAtUtc`;
-- `Reason?`.
+- `Reason?`;
+- `ProviderRefundId?` (`re_mock_<guid>` для Stripe-like платежа; `null` для
+  mock-платежа).
 
 Каждый refund, включая полный, создаёт запись `Refund`. Несколько частичных
 refund допускаются. `Payment.Status = Refunded` устанавливается только при
@@ -172,6 +179,8 @@ Checkout создаёт `Payment` в состоянии `Pending` в той же
 
 - refund выполняется in-process через `IPaymentRefundService` (домен
   `Payment`/`Refund`); `IPaymentProvider.RefundAsync` не используется;
+- `Refund.ProviderRefundId` заполняется mock-провайдером: `re_mock_<guid>` для
+  Stripe-like платежа и `null` для mock (см. §5.1);
 - `Payment.Status = Refunded` при полном возврате, `Confirmed` при частичном;
 - для каждой операции создаётся `Refund`;
 - `Payment.RefundedAmount` увеличивается на `amount`;
@@ -198,6 +207,52 @@ Development-обёртка; он не выполняет переход зака
 `409 refund_not_allowed`. Refund больше остатка также возвращает
 `409 refund_not_allowed`.
 
+### 5.1 Stripe-like режим (этап 23)
+
+Режим включается `Stripe:Enabled = true` и не является интеграцией со Stripe:
+Stripe.net, реальные ключи и ClientSecret не вводятся (этап 24). Подробное
+решение — [ADR-012](../adr/ADR-012-stripe-like-webhooks.md).
+
+Checkout:
+
+- основная транзакция создаёт `Payment` в `Pending` вместе с заказом;
+- после commit отдельная транзакция выставляет `Payment.Provider =
+  Stripe:ProviderName` (по умолчанию `stripe`) и
+  `ProviderPaymentId = pi_mock_<guid>`;
+- сбой инициализации не откатывает заказ; платёж остаётся mock.
+
+Подтверждение:
+
+- синхронный `POST /api/payments/{paymentId}/confirm` при `Enabled = true`
+  возвращает `409 payment_confirm_not_supported`;
+- подтверждение выполняет `POST /api/webhooks/stripe` по событию
+  `payment_intent.succeeded`;
+- endpoint анонимный, читает raw body и проверяет `Stripe-Signature`
+  (HMAC-SHA256 по `{timestamp}.{payload}`, tolerance по умолчанию 300 секунд);
+- при `Enabled = false` endpoint возвращает `200` без проверки и изменений.
+
+Идемпотентность и состояние:
+
+- `ProcessedStripeEvents` хранит `EventId` с уникальным индексом; повторная
+  доставка возвращает `200` без повторных изменений;
+- успешное событие в одной транзакции подтверждает `Payment`, списывает
+  `Reserved`, переводит заказ в `Paid`, пишет outbox и processed event; после
+  commit публикуются `PaymentConfirmed` и `OrderPaid`;
+- события с неизвестным платежом, неверной суммой/валютой, неподходящим
+  статусом, а также неподдерживаемые типы подтверждаются и записываются без
+  изменения состояния;
+- `charge.refunded` и `refund.updated` — no-op.
+
+Refund остаётся синхронным. `PaymentRefundService` создаёт `Refund` в
+существующей транзакции admin refund / cancel / return и выставляет
+`ProviderRefundId = re_mock_<guid>`, если `Payment.Provider` совпадает с
+`Stripe:ProviderName`; для mock-платежа поле остаётся `null`. Значение приходит
+из mock refund, а не из вебхука; реальное обновление по `charge.refunded` —
+этап 24.
+
+Границы этапа 23: нет реального провайдера, Stripe.net, ClientSecret,
+reconciliation, retry/порядка доставки вебхуков и мультивалютности.
+
 ## 6. IPaymentProvider
 
 Интерфейс Application:
@@ -220,8 +275,9 @@ Mock:
   refund выполняется in-process и не вызывает его;
 - не обращается к внешней сети.
 
-Реальный провайдер, Stripe, вебхуки, reconciliation и хранение платёжных
-секретов не вводятся (ADR-008).
+Реальный провайдер, Stripe.net, reconciliation и хранение платёжных секретов не
+вводятся (ADR-008). Stripe-like режим из §5.1 использует mock-идентификаторы и
+HMAC-секрет вебхука из конфигурации, а не реальный SDK.
 
 ## 7. Идемпотентность
 
@@ -321,10 +377,11 @@ HTTP-статусы определены в `api.md`, §4.1.
 
 ## 10. Ограничения
 
-В MVP+:
+В MVP+ (без Stripe-like режима этапа 23):
 
-- нет Stripe и реального провайдера;
-- нет вебхуков;
+- нет реального провайдера и Stripe.net; Stripe-like режим использует mock
+  provider ids и HMAC-вебхук;
+- нет реального обновления состояния по `charge.refunded`;
 - нет reconciliation;
 - нет частичных платежей; `Payment.Amount` равен сумме заказа;
 - нет мультивалютности; все суммы — USD;

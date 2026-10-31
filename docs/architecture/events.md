@@ -87,6 +87,19 @@ commit транзакции.
 публикуется после refund, включая refund внутри cancel/return. `OrderReturned`
 и `PaymentRefunded` публикуются после успешного return.
 
+Stripe-like режим (этап 23; [ADR-012](../adr/ADR-012-stripe-like-webhooks.md)):
+
+- `payment_intent.succeeded` в `POST /api/webhooks/stripe` подтверждает
+  `Payment`, списывает `Reserved` и переводит заказ в `Paid` в одной
+  транзакции; после commit публикуются `PaymentConfirmed` и `OrderPaid` по тем
+  же правилам, что и для синхронного confirm;
+- повторная доставка события не публикует события повторно:
+  `ProcessedStripeEvents.EventId` обеспечивает идемпотентность;
+- `charge.refunded` и `refund.updated` — no-op и не публикуют доменных
+  событий; `PaymentRefunded` по-прежнему публикуется синхронным mock refund в
+  admin refund / cancel / return, а `Refund.ProviderRefundId` выставляется этим
+  mock-вызовом, а не вебхуком.
+
 Корзина не порождает доменных событий. Для неё нет событий `CartUpdated`,
 `CartItemAdded` и аналогичных.
 

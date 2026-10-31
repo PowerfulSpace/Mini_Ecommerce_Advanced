@@ -130,7 +130,7 @@ public class Payment
         Status = PaymentStatus.Pending;
     }
 
-    public void AddRefund(Money amount, DateTime utcNow, string? reason = null)
+    public Refund AddRefund(Money amount, DateTime utcNow, string? reason = null)
     {
         if (Status != PaymentStatus.Confirmed)
         {
@@ -160,5 +160,7 @@ public class Payment
             Status = PaymentStatus.Refunded;
             RefundedAtUtc = utcNow;
         }
+
+        return refund;
     }
 }

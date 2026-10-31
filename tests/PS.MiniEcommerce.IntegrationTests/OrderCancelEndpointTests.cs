@@ -3,10 +3,12 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Payments;
 using PS.MiniEcommerce.Infrastructure;
+using PS.MiniEcommerce.Infrastructure.Payments;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 using PS.MiniEcommerce.Infrastructure.Seed;
 using PS.MiniEcommerce.IntegrationTests.Fixtures;
@@ -294,7 +296,8 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         Assert.Equal(PaymentStatus.Refunded, payment.Status);
         Assert.Equal(payment.Amount.Amount, payment.RefundedAmount.Amount);
         Assert.NotNull(payment.RefundedAtUtc);
-        Assert.Single(payment.Refunds);
+        var refund = Assert.Single(payment.Refunds);
+        Assert.Null(refund.ProviderRefundId);
 
         var paymentRefunded = Assert.Single(_capture.Events.OfType<PaymentRefunded>());
         Assert.Equal(payment.Id, paymentRefunded.PaymentId);
@@ -315,6 +318,37 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         var cancelledItem = Assert.Single(orderCancelled.Items);
         Assert.Equal(2, cancelledItem.Quantity);
         Assert.True(_capture.OrderCancelledWasVisibleAfterCommit);
+    }
+
+    [Fact]
+    public async Task CancelOrder_WhenStripeEnabled_RefundGetsMockProviderRefundId()
+    {
+        using var factory = new CustomWebApplicationFactory(
+            _fixture.ConnectionString,
+            configureTestServices: services =>
+            {
+                services.Configure<StripeOptions>(options =>
+                {
+                    options.Enabled = true;
+                    options.WebhookSecret = "whsec_test_secret_123456";
+                });
+            });
+        using var client = factory.CreateClient();
+
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2, client);
+        await SetStatusAsync(orderId, OrderStatus.Paid);
+
+        var response = await CancelAsync(Alice, orderId, client);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var payment = await GetPaymentByOrderIdAsync(orderId);
+        Assert.NotNull(payment);
+        Assert.Equal("stripe", payment.Provider);
+        Assert.Equal(PaymentStatus.Refunded, payment.Status);
+        var refund = Assert.Single(payment.Refunds);
+        Assert.NotNull(refund.ProviderRefundId);
+        Assert.StartsWith("re_mock_", refund.ProviderRefundId);
     }
 
     [Fact]
@@ -637,17 +671,21 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         Assert.Equal(OrderStatus.Returned, await GetOrderStatusAsync(orderId));
     }
 
-    private async Task<HttpResponseMessage> CancelAsync(string testUser, Guid orderId)
+    private async Task<HttpResponseMessage> CancelAsync(
+        string testUser,
+        Guid orderId,
+        HttpClient? client = null)
     {
-        var etag = await GetOrderETagAsync(testUser, orderId);
-        return await SendCancelAsync(testUser, orderId, etag);
+        var etag = await GetOrderETagAsync(testUser, orderId, client);
+        return await SendCancelAsync(testUser, orderId, etag, client: client);
     }
 
     private Task<HttpResponseMessage> SendCancelAsync(
         string testUser,
         Guid orderId,
         string? ifMatch,
-        object? body = null)
+        object? body = null,
+        HttpClient? client = null)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, $"/api/orders/{orderId}/cancel");
         request.Headers.Add("X-Test-User", testUser);
@@ -662,12 +700,15 @@ public class OrderCancelEndpointTests : IAsyncLifetime
             request.Content = JsonContent.Create(body);
         }
 
-        return _client.SendAsync(request);
+        return (client ?? _client).SendAsync(request);
     }
 
-    private async Task<string> GetOrderETagAsync(string testUser, Guid orderId)
+    private async Task<string> GetOrderETagAsync(
+        string testUser,
+        Guid orderId,
+        HttpClient? client = null)
     {
-        var response = await GetOrderByIdResponseAsync(testUser, orderId);
+        var response = await GetOrderByIdResponseAsync(testUser, orderId, client);
         response.EnsureSuccessStatusCode();
         return response.Headers.ETag!.Tag;
     }
@@ -681,20 +722,28 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         return order;
     }
 
-    private Task<HttpResponseMessage> GetOrderByIdResponseAsync(string testUser, Guid orderId)
+    private Task<HttpResponseMessage> GetOrderByIdResponseAsync(
+        string testUser,
+        Guid orderId,
+        HttpClient? client = null)
     {
         var request = new HttpRequestMessage(HttpMethod.Get, $"/api/orders/{orderId}");
         request.Headers.Add("X-Test-User", testUser);
-        return _client.SendAsync(request);
+        return (client ?? _client).SendAsync(request);
     }
 
-    private async Task<Guid> CreateOrderAsync(string testUser, string productName, int quantity)
+    private async Task<Guid> CreateOrderAsync(
+        string testUser,
+        string productName,
+        int quantity,
+        HttpClient? client = null)
     {
+        var httpClient = client ?? _client;
         var productId = await GetActiveProductIdAsync(productName);
 
         var cartRequest = new HttpRequestMessage(HttpMethod.Get, "/api/cart");
         cartRequest.Headers.Add("X-Test-User", testUser);
-        var cartResponse = await _client.SendAsync(cartRequest);
+        var cartResponse = await httpClient.SendAsync(cartRequest);
         cartResponse.EnsureSuccessStatusCode();
         var etag = cartResponse.Headers.ETag!.Tag;
 
@@ -704,7 +753,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         };
         addRequest.Headers.Add("X-Test-User", testUser);
         addRequest.Headers.Add("If-Match", etag);
-        var addResponse = await _client.SendAsync(addRequest);
+        var addResponse = await httpClient.SendAsync(addRequest);
         addResponse.EnsureSuccessStatusCode();
         var newEtag = addResponse.Headers.ETag!.Tag;
 
@@ -712,7 +761,7 @@ public class OrderCancelEndpointTests : IAsyncLifetime
         orderRequest.Headers.Add("X-Test-User", testUser);
         orderRequest.Headers.Add("Idempotency-Key", $"test-order-{Guid.NewGuid():N}".Substring(0, 32));
         orderRequest.Headers.Add("If-Match", newEtag);
-        var orderResponse = await _client.SendAsync(orderRequest);
+        var orderResponse = await httpClient.SendAsync(orderRequest);
         orderResponse.EnsureSuccessStatusCode();
 
         var location = orderResponse.Headers.Location!.ToString();

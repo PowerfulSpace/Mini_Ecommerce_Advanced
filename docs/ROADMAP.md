@@ -952,7 +952,10 @@ M9, M10, M11, M14 — вне объёма.
 - M10 — промо, скидки, купоны и налоги.
 - M11 — реальная JWT/OAuth-аутентификация.
 - M14 — reconciliation платежей.
-- Stripe, реальные платёжные провайдеры и вебхуки.
+- Stripe-like вебхуки и mock provider ids — реализованы как этап 23 (вне MVP+);
+  см. [ADR-012](adr/ADR-012-stripe-like-webhooks.md).
+- Stripe.net, реальный провайдер, ClientSecret и reconciliation — этап 24
+  (вне MVP+).
 - Outbox и гарантированная доставка событий — реализованы как этап 20 (вне
   MVP+); см. [ADR-011](adr/ADR-011-outbox.md).
 - TTL резервов, фоновый cleanup и recovery.

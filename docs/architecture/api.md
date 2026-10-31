@@ -706,6 +706,9 @@ Idempotency-Key: <client-generated key>
 - Только владелец платежа может подтвердить платёж.
 - Mock-провайдер выполняет `Pending → Confirmed`, заказ переходит
   `Created → Paid`, `Reserved` списывается.
+- При `Stripe:Enabled = true` синхронный confirm недоступен и возвращает `409`
+  с кодом `payment_confirm_not_supported`; подтверждение выполняет
+  `POST /api/webhooks/stripe`.
 - Подтверждение платежа, списание `Reserved`, перевод заказа в `Paid` и
   завершение записи идемпотентности выполняются в одной транзакции.
 - Если `Payment.Status = Failed`, повтор с тем же ключом и отпечатком выполняет
@@ -726,7 +729,8 @@ Idempotency-Key: <client-generated key>
   с кодом `payment_not_found`.
 - `409 Conflict` — `payment_already_confirmed` (другой отпечаток),
   `payment_failed` (mock вернул `Failed`), `invalid_order_transition` (заказ не
-  в `Created`) или `idempotency_key_reused`.
+  в `Created`), `payment_confirm_not_supported` (включён Stripe-like режим) или
+  `idempotency_key_reused`.
 - `503 Service Unavailable` — `idempotency_in_progress` после ограниченного
   ожидания.
 
@@ -880,6 +884,46 @@ Idempotency-Key: <client-generated key>
 - `409 Conflict` — заказ не в `Delivered` (`invalid_order_transition`) или
   refund невозможен (`refund_not_allowed`).
 
+### 3.7 Вебхуки
+
+#### `POST /api/webhooks/stripe`
+
+Принимает Stripe-like событие. Endpoint анонимный и доступен в Development и
+Production; включается `Stripe:Enabled`.
+
+Заголовок:
+
+```http
+Stripe-Signature: t=<unix-timestamp>,v1=<hex-signature>[,v1=<hex-signature>...]
+```
+
+Тело — raw JSON события провайдера. Подпись — HMAC-SHA256 по строке
+`{timestamp}.{payload}` с `Stripe:WebhookSecret`; допускается несколько
+`v1`-подписей. Timestamp должен попадать в `Stripe:SignatureToleranceSeconds`
+(по умолчанию 300).
+
+Обрабатываемые типы:
+
+- `payment_intent.succeeded` — подтверждает платёж по `ProviderPaymentId`,
+  списывает `Reserved`, переводит заказ `Created → Paid`, пишет outbox и
+  `ProcessedStripeEvent`; после commit публикует `PaymentConfirmed` и
+  `OrderPaid`;
+- `charge.refunded` и `refund.updated` — no-op; событие записывается и
+  подтверждается;
+- неизвестные типы — no-op; событие записывается и подтверждается.
+
+Ответы:
+
+- `200 OK` — событие обработано, уже обработано ранее или осознанно
+  пропущено. При `Stripe:Enabled = false` возвращается `200` без проверки
+  подписи и без изменений.
+- `400 Bad Request` — отсутствует или неверна подпись, timestamp вне допуска
+  или тело не является JSON-объектом с `id` и `type`. Ответ не раскрывает
+  секрет и внутренние детали.
+
+Контракт ошибок `ProblemDetails` из §4 не применяется к этому endpoint:
+провайдер получает только статус без тела.
+
 ## 4. Формат ошибок
 
 Ошибки используют стандартную форму `ProblemDetails` со стабильным расширением
@@ -929,6 +973,7 @@ Idempotency-Key: <client-generated key>
 | `invalid_order_transition` | 409 | Недопустимый переход статуса заказа |
 | `order_already_cancelled` | 409 | Заказ уже отменён |
 | `payment_already_confirmed` | 409 | Платёж уже подтверждён с другим отпечатком |
+| `payment_confirm_not_supported` | 409 | Синхронный confirm недоступен при `Stripe:Enabled = true` |
 | `payment_failed` | 409 | Mock-провайдер вернул `Failed` |
 | `refund_not_allowed` | 409 | Refund невозможен по статусу или сумме |
 | `admin_stock_conflict` | 409 | Конкурентное изменение admin stock |
@@ -1065,7 +1110,8 @@ API MVP+ не включает:
 
 - Реальную аутентификацию и авторизацию (JWT/OAuth), регистрацию пользователей
   производственного уровня
-- Реальный платёжный провайдер, Stripe, webhooks и reconciliation
+- Реальный платёжный провайдер и Stripe.net (Stripe-like режим этапа 23
+  использует mock provider ids и HMAC-вебхук), reconciliation
 - Уведомления
 - Промо, купоны, скидки и налоги
 - Outbox, внешний обмен сообщениями и фоновую обработку

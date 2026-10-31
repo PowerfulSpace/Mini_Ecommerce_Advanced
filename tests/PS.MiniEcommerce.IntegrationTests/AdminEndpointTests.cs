@@ -10,6 +10,7 @@ using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Payments;
 using PS.MiniEcommerce.Infrastructure;
+using PS.MiniEcommerce.Infrastructure.Payments;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 using PS.MiniEcommerce.Infrastructure.Seed;
 using PS.MiniEcommerce.IntegrationTests.Fixtures;
@@ -392,7 +393,8 @@ public class AdminEndpointTests : IAsyncLifetime
         Assert.Equal(PaymentStatus.Refunded, payment.Status);
         Assert.Equal(payment.Amount.Amount, payment.RefundedAmount.Amount);
         Assert.NotNull(payment.RefundedAtUtc);
-        Assert.Single(payment.Refunds);
+        var refund = Assert.Single(payment.Refunds);
+        Assert.Null(refund.ProviderRefundId);
 
         var paymentRefunded = Assert.Single(_capture.Events.OfType<PaymentRefunded>());
         Assert.Equal(payment.Id, paymentRefunded.PaymentId);
@@ -409,6 +411,42 @@ public class AdminEndpointTests : IAsyncLifetime
         Assert.Equal(orderId, auditLog.EntityId);
         Assert.Equal(adminUserId, auditLog.ActorUserId);
         Assert.Null(auditLog.Payload);
+    }
+
+    [Fact]
+    public async Task AdminReturn_WhenStripeEnabled_RefundGetsMockProviderRefundId()
+    {
+        using var factory = new CustomWebApplicationFactory(
+            _fixture.ConnectionString,
+            configureTestServices: services =>
+            {
+                services.Configure<StripeOptions>(options =>
+                {
+                    options.Enabled = true;
+                    options.WebhookSecret = "whsec_test_secret_123456";
+                });
+            });
+        using var client = factory.CreateClient();
+
+        var orderId = await CreateOrderAsync(Alice, WirelessMouse, 2, client);
+        var paymentId = await SetStatusAsync(orderId, OrderStatus.Delivered);
+
+        var response = await SendAdminAsync(
+            HttpMethod.Post,
+            $"/api/admin/orders/{orderId}/return",
+            Admin,
+            client: client);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var payment = await GetPaymentByOrderIdAsync(orderId);
+        Assert.NotNull(payment);
+        Assert.Equal(paymentId, payment.Id);
+        Assert.Equal("stripe", payment.Provider);
+        Assert.Equal(PaymentStatus.Refunded, payment.Status);
+        var refund = Assert.Single(payment.Refunds);
+        Assert.NotNull(refund.ProviderRefundId);
+        Assert.StartsWith("re_mock_", refund.ProviderRefundId);
     }
 
     [Fact]
@@ -585,13 +623,18 @@ public class AdminEndpointTests : IAsyncLifetime
             .SingleAsync();
     }
 
-    private async Task<Guid> CreateOrderAsync(string testUser, string productName, int quantity)
+    private async Task<Guid> CreateOrderAsync(
+        string testUser,
+        string productName,
+        int quantity,
+        HttpClient? client = null)
     {
+        var httpClient = client ?? _client;
         var productId = await GetActiveProductIdAsync(productName);
 
         var cartRequest = new HttpRequestMessage(HttpMethod.Get, "/api/cart");
         cartRequest.Headers.Add("X-Test-User", testUser);
-        var cartResponse = await _client.SendAsync(cartRequest);
+        var cartResponse = await httpClient.SendAsync(cartRequest);
         cartResponse.EnsureSuccessStatusCode();
         var etag = cartResponse.Headers.ETag!.Tag;
 
@@ -601,7 +644,7 @@ public class AdminEndpointTests : IAsyncLifetime
         };
         addRequest.Headers.Add("X-Test-User", testUser);
         addRequest.Headers.Add("If-Match", etag);
-        var addResponse = await _client.SendAsync(addRequest);
+        var addResponse = await httpClient.SendAsync(addRequest);
         addResponse.EnsureSuccessStatusCode();
         var newEtag = addResponse.Headers.ETag!.Tag;
 
@@ -609,7 +652,7 @@ public class AdminEndpointTests : IAsyncLifetime
         orderRequest.Headers.Add("X-Test-User", testUser);
         orderRequest.Headers.Add("Idempotency-Key", $"admin-order-{Guid.NewGuid():N}".Substring(0, 32));
         orderRequest.Headers.Add("If-Match", newEtag);
-        var orderResponse = await _client.SendAsync(orderRequest);
+        var orderResponse = await httpClient.SendAsync(orderRequest);
         orderResponse.EnsureSuccessStatusCode();
 
         var location = orderResponse.Headers.Location!.ToString();
