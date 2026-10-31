@@ -99,6 +99,39 @@ public class PaymentsEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Confirm_WhenStripeEnabled_Returns409PaymentConfirmNotSupported()
+    {
+        using var factory = new CustomWebApplicationFactory(
+            _fixture.ConnectionString,
+            configureTestServices: services =>
+            {
+                services.Configure<StripeOptions>(options =>
+                {
+                    options.Enabled = true;
+                    options.WebhookSecret = "whsec_test_secret_123456";
+                });
+            });
+        using var client = factory.CreateClient();
+
+        var order = await CreateOrderAsync(client, Alice, WirelessMouse, quantity: 1);
+
+        var response = await ConfirmAsync(client, order.PaymentId, "confirm-stripe-enabled-1");
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("payment_confirm_not_supported", error.Code);
+        Assert.Empty(await GetPaymentAttemptsAsync());
+
+        var payment = await GetPaymentAsync(order.PaymentId);
+        Assert.NotNull(payment);
+        Assert.Equal(PaymentStatus.Pending, payment.Status);
+        Assert.Equal("stripe", payment.Provider);
+        Assert.StartsWith("pi_mock_", payment.ProviderPaymentId);
+        Assert.Equal(OrderStatus.Created, await GetOrderStatusAsync(order.OrderId));
+    }
+
+    [Fact]
     public async Task Confirm_PaymentConfirmedAndOrderPaidAreVisibleAfterCommit()
     {
         var order = await CreateOrderAsync(_client, Alice, WirelessMouse, quantity: 1);

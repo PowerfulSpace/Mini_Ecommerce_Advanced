@@ -2,6 +2,7 @@ using System.Text.Json;
 using MediatR;
 using Microsoft.Extensions.Logging;
 using PS.MiniEcommerce.Application.Abstractions.CurrentUser;
+using PS.MiniEcommerce.Application.Abstractions.Payments;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Events;
 using PS.MiniEcommerce.Application.Exceptions;
@@ -22,6 +23,7 @@ public class ConfirmPaymentHandler : IRequestHandler<ConfirmPaymentCommand, Conf
     private readonly ICurrentUser _currentUser;
     private readonly IMediator _mediator;
     private readonly ILogger<ConfirmPaymentHandler> _logger;
+    private readonly IStripeFeature _stripeFeature;
     private readonly ConfirmAttemptContext? _confirmAttemptContext;
 
     public ConfirmPaymentHandler(
@@ -30,6 +32,7 @@ public class ConfirmPaymentHandler : IRequestHandler<ConfirmPaymentCommand, Conf
         ICurrentUser currentUser,
         IMediator mediator,
         ILogger<ConfirmPaymentHandler> logger,
+        IStripeFeature stripeFeature,
         ConfirmAttemptContext? confirmAttemptContext = null)
     {
         _paymentAttemptRepository = paymentAttemptRepository;
@@ -37,6 +40,7 @@ public class ConfirmPaymentHandler : IRequestHandler<ConfirmPaymentCommand, Conf
         _currentUser = currentUser;
         _mediator = mediator;
         _logger = logger;
+        _stripeFeature = stripeFeature;
         _confirmAttemptContext = confirmAttemptContext;
     }
 
@@ -44,6 +48,13 @@ public class ConfirmPaymentHandler : IRequestHandler<ConfirmPaymentCommand, Conf
         ConfirmPaymentCommand request,
         CancellationToken cancellationToken)
     {
+        if (_stripeFeature.Enabled)
+        {
+            throw new DomainConflictException(
+                "Payment confirmation is not supported when Stripe is enabled.",
+                "payment_confirm_not_supported");
+        }
+
         var userId = _currentUser.UserId;
         var utcNow = DateTime.UtcNow;
 

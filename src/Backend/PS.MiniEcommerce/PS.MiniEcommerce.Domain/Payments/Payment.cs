@@ -59,6 +59,23 @@ public class Payment
         return new Payment(Guid.NewGuid(), orderId, amount, utcNow);
     }
 
+    public void SetProvider(string provider)
+    {
+        if (string.IsNullOrWhiteSpace(provider))
+        {
+            throw new DomainValidationException("Provider must not be empty.");
+        }
+
+        if (Provider != "mock")
+        {
+            throw new DomainConflictException(
+                "Provider has already been set.",
+                "provider_already_set");
+        }
+
+        Provider = provider;
+    }
+
     public void SetProviderPaymentId(string providerPaymentId)
     {
         if (string.IsNullOrWhiteSpace(providerPaymentId))

@@ -59,6 +59,7 @@ public static class DependencyInjection
         services.AddSingleton<IValidateOptions<StripeOptions>, StripeOptionsValidator>();
         services.AddOptions<StripeOptions>().ValidateOnStart();
         services.AddSingleton<IStripeWebhookVerifier, HmacStripeWebhookVerifier>();
+        services.AddSingleton<IStripeFeature, StripeFeature>();
 
         services.AddScoped<MockNotificationSender>();
         services.AddScoped<SmtpNotificationSender>();

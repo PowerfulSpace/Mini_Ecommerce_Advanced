@@ -2,6 +2,7 @@ using MediatR;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using PS.MiniEcommerce.Application.Abstractions.CurrentUser;
+using PS.MiniEcommerce.Application.Abstractions.Payments;
 using PS.MiniEcommerce.Application.Abstractions.Persistence;
 using PS.MiniEcommerce.Application.Events;
 using PS.MiniEcommerce.Application.Payments;
@@ -21,6 +22,67 @@ public class ConfirmPaymentHandlerTests
     private static readonly byte[] Fingerprint = new byte[32];
     private static readonly byte[] OtherFingerprint = Enumerable.Repeat((byte)0xFF, 32).ToArray();
     private static readonly DateTime FixedUtcNow = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+    [Fact]
+    public async Task Handle_WhenStripeEnabled_ThrowsPaymentConfirmNotSupportedWithoutTouchingAttempts()
+    {
+        var repository = Substitute.For<IPaymentAttemptRepository>();
+        var executor = Substitute.For<IConfirmTransactionExecutor>();
+        var stripeFeature = Substitute.For<IStripeFeature>();
+        stripeFeature.Enabled.Returns(true);
+        var handler = CreateHandler(repository, executor, stripeFeature: stripeFeature);
+
+        var exception = await Assert.ThrowsAsync<DomainConflictException>(
+            () => handler.Handle(CreateCommand(), CancellationToken.None));
+
+        Assert.Equal("payment_confirm_not_supported", exception.Code);
+        await repository.DidNotReceive().GetByUserAndKeyAsync(
+            Arg.Any<Guid>(),
+            Arg.Any<string>(),
+            Arg.Any<CancellationToken>());
+        await repository.DidNotReceive().ReserveAsync(
+            Arg.Any<Guid>(),
+            Arg.Any<string>(),
+            Arg.Any<byte[]>(),
+            Arg.Any<DateTime>(),
+            Arg.Any<TimeSpan>(),
+            Arg.Any<CancellationToken>());
+        await executor.DidNotReceive().ExecuteAsync(
+            Arg.Any<Guid>(),
+            Arg.Any<Guid>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Handle_WhenStripeDisabled_UsesMockFlow()
+    {
+        var repository = Substitute.For<IPaymentAttemptRepository>();
+        repository
+            .GetByUserAndKeyAsync(UserId, IdempotencyKey, Arg.Any<CancellationToken>())
+            .Returns((PaymentAttemptData?)null);
+        repository
+            .ReserveAsync(
+                UserId,
+                IdempotencyKey,
+                Arg.Any<byte[]>(),
+                Arg.Any<DateTime>(),
+                Arg.Any<TimeSpan>(),
+                Arg.Any<CancellationToken>())
+            .Returns(CreateAttempt(PaymentAttemptState.InProgress));
+        var executor = Substitute.For<IConfirmTransactionExecutor>();
+        var expected = CreateSuccessResult();
+        executor
+            .ExecuteAsync(PaymentId, UserId, Arg.Any<CancellationToken>())
+            .Returns(expected);
+        var stripeFeature = Substitute.For<IStripeFeature>();
+        stripeFeature.Enabled.Returns(false);
+        var handler = CreateHandler(repository, executor, stripeFeature: stripeFeature);
+
+        var result = await handler.Handle(CreateCommand(), CancellationToken.None);
+
+        Assert.Equal(expected, result);
+        await executor.Received(1).ExecuteAsync(PaymentId, UserId, Arg.Any<CancellationToken>());
+    }
 
     [Fact]
     public async Task Handle_WhenAttemptExistsWithDifferentFingerprint_ThrowsIdempotencyKeyReused()
@@ -259,7 +321,8 @@ public class ConfirmPaymentHandlerTests
     private static ConfirmPaymentHandler CreateHandler(
         IPaymentAttemptRepository repository,
         IConfirmTransactionExecutor executor,
-        IMediator? mediator = null)
+        IMediator? mediator = null,
+        IStripeFeature? stripeFeature = null)
     {
         var currentUser = Substitute.For<ICurrentUser>();
         currentUser.UserId.Returns(UserId);
@@ -269,7 +332,8 @@ public class ConfirmPaymentHandlerTests
             executor,
             currentUser,
             mediator ?? Substitute.For<IMediator>(),
-            Substitute.For<ILogger<ConfirmPaymentHandler>>());
+            Substitute.For<ILogger<ConfirmPaymentHandler>>(),
+            stripeFeature ?? Substitute.For<IStripeFeature>());
     }
 
     private static PaymentAttemptData CreateAttempt(

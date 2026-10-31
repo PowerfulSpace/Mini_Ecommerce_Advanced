@@ -35,6 +35,40 @@ public class PaymentTests
     }
 
     [Fact]
+    public void SetProvider_FromMock_SetsProvider()
+    {
+        var payment = Payment.Create(OrderId, Money.FromDecimal(100m), FixedUtcNow);
+
+        payment.SetProvider("stripe");
+
+        Assert.Equal("stripe", payment.Provider);
+    }
+
+    [Fact]
+    public void SetProvider_WhenAlreadySet_ThrowsProviderAlreadySet()
+    {
+        var payment = Payment.Create(OrderId, Money.FromDecimal(100m), FixedUtcNow);
+        payment.SetProvider("stripe");
+
+        var exception = Assert.Throws<DomainConflictException>(
+            () => payment.SetProvider("other"));
+
+        Assert.Equal("provider_already_set", exception.Code);
+        Assert.Equal("stripe", payment.Provider);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void SetProvider_WithEmptyValue_ThrowsDomainValidationException(string provider)
+    {
+        var payment = Payment.Create(OrderId, Money.FromDecimal(100m), FixedUtcNow);
+
+        Assert.Throws<DomainValidationException>(
+            () => payment.SetProvider(provider));
+    }
+
+    [Fact]
     public void SetProviderPaymentId_FromMock_SetsProviderPaymentId()
     {
         var payment = Payment.Create(OrderId, Money.FromDecimal(100m), FixedUtcNow);

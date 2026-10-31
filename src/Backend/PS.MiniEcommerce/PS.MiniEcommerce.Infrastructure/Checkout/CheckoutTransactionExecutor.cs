@@ -2,6 +2,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using PS.MiniEcommerce.Application.Abstractions.Outbox;
 using PS.MiniEcommerce.Application.Carts;
 using PS.MiniEcommerce.Application.Checkout;
@@ -11,6 +12,7 @@ using PS.MiniEcommerce.Application.Orders.DTOs;
 using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Domain.Exceptions;
 using PS.MiniEcommerce.Domain.Payments;
+using PS.MiniEcommerce.Infrastructure.Payments;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 
 namespace PS.MiniEcommerce.Infrastructure.Checkout;
@@ -24,17 +26,20 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
     private readonly AppDbContext _dbContext;
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly IOutboxRepository _outboxRepository;
+    private readonly IOptions<StripeOptions> _stripeOptions;
     private readonly ILogger<CheckoutTransactionExecutor> _logger;
 
     public CheckoutTransactionExecutor(
         AppDbContext dbContext,
         IServiceScopeFactory serviceScopeFactory,
         IOutboxRepository outboxRepository,
+        IOptions<StripeOptions> stripeOptions,
         ILogger<CheckoutTransactionExecutor> logger)
     {
         _dbContext = dbContext;
         _serviceScopeFactory = serviceScopeFactory;
         _outboxRepository = outboxRepository;
+        _stripeOptions = stripeOptions;
         _logger = logger;
     }
 
@@ -211,12 +216,13 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
         cart.RemoveSelected(utcNow);
 
         string responsePayload;
+        Payment payment;
 
         try
         {
             await _dbContext.SaveChangesAsync(cancellationToken);
 
-            var payment = Payment.Create(order.Id, order.TotalAmount, utcNow);
+            payment = Payment.Create(order.Id, order.TotalAmount, utcNow);
             _dbContext.Payments.Add(payment);
             order.SetPaymentId(payment.Id);
             order.SetPayment(payment);
@@ -275,6 +281,11 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
                 exception);
         }
 
+        if (_stripeOptions.Value.Enabled)
+        {
+            await TryInitializeStripePaymentAsync(payment, cancellationToken);
+        }
+
         var newRowVersion = await _dbContext.Orders
             .AsNoTracking()
             .Where(createdOrder => createdOrder.Id == order.Id)
@@ -291,6 +302,35 @@ public class CheckoutTransactionExecutor : ICheckoutTransactionExecutor
             OrderId: order.Id,
             NewOrderRowVersion: newRowVersion,
             DomainEvents: domainEvents);
+    }
+
+    private async Task TryInitializeStripePaymentAsync(
+        Payment payment,
+        CancellationToken cancellationToken)
+    {
+        var providerPaymentId = $"pi_mock_{Guid.NewGuid()}";
+
+        try
+        {
+            payment.SetProvider(_stripeOptions.Value.ProviderName);
+            payment.SetProviderPaymentId(providerPaymentId);
+
+            await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            _logger.LogInformation(
+                "Initialized mock Stripe PaymentIntent {ProviderPaymentId} for payment {PaymentId}.",
+                providerPaymentId,
+                payment.Id);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Failed to initialize mock Stripe PaymentIntent for payment {PaymentId}; payment remains pending.",
+                payment.Id);
+        }
     }
 
     private async Task<DomainConflictException?> BuildStockOrAvailabilityErrorAsync(

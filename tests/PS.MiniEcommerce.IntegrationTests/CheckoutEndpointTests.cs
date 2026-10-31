@@ -3,10 +3,12 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.DependencyInjection;
 using PS.MiniEcommerce.Domain;
 using PS.MiniEcommerce.Domain.Events;
 using PS.MiniEcommerce.Domain.Payments;
 using PS.MiniEcommerce.Infrastructure;
+using PS.MiniEcommerce.Infrastructure.Payments;
 using PS.MiniEcommerce.Infrastructure.Persistence;
 using PS.MiniEcommerce.Infrastructure.Seed;
 using PS.MiniEcommerce.IntegrationTests.Fixtures;
@@ -100,6 +102,65 @@ public class CheckoutEndpointTests : IAsyncLifetime
         Assert.Equal(1, orderPlaced.ItemCount);
         Assert.True(_capture.OrderPlacedWasVisibleAfterCommit);
         Assert.DoesNotContain(_capture.Events, domainEvent => domainEvent is ProductDeactivated);
+    }
+
+    [Fact]
+    public async Task PostOrders_WhenStripeEnabled_CreatesMockPaymentIntentAndConfirmReturns409()
+    {
+        var productId = await GetActiveProductIdAsync(WirelessMouse);
+        var etag = await AddItemToAliceCartAsync(productId, 1);
+
+        using var factory = CreateStripeEnabledFactory();
+        using var client = factory.CreateClient();
+
+        const string idempotencyKey = "checkout-stripe-enabled-1";
+        var response = await client.SendAsync(CreateCheckoutRequest(idempotencyKey, etag));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var order = await response.Content.ReadFromJsonAsync<OrderResponse>();
+        Assert.NotNull(order);
+        Assert.NotNull(order.PaymentId);
+        Assert.NotNull(order.Payment);
+        Assert.Null(order.Payment.ClientSecret);
+
+        var storedPayment = await GetPaymentAsync(order.PaymentId.Value);
+        Assert.NotNull(storedPayment);
+        Assert.Equal("stripe", storedPayment.Provider);
+        Assert.NotNull(storedPayment.ProviderPaymentId);
+        Assert.StartsWith("pi_mock_", storedPayment.ProviderPaymentId);
+        Assert.Equal(PaymentStatus.Pending, storedPayment.Status);
+
+        var confirm = await ConfirmAsync(client, order.PaymentId.Value, "stripe-confirm-1");
+
+        Assert.Equal(HttpStatusCode.Conflict, confirm.StatusCode);
+        var error = await confirm.Content.ReadFromJsonAsync<ErrorResponse>();
+        Assert.NotNull(error);
+        Assert.Equal("payment_confirm_not_supported", error.Code);
+        Assert.Equal(0, await GetPaymentAttemptsCountAsync());
+
+        var afterConfirm = await GetPaymentAsync(order.PaymentId.Value);
+        Assert.NotNull(afterConfirm);
+        Assert.Equal(PaymentStatus.Pending, afterConfirm.Status);
+    }
+
+    [Fact]
+    public async Task PostOrders_WhenStripeDisabled_KeepsMockProvider()
+    {
+        var productId = await GetActiveProductIdAsync(WirelessMouse);
+        var etag = await AddItemToAliceCartAsync(productId, 1);
+
+        var response = await _client.SendAsync(
+            CreateCheckoutRequest("checkout-stripe-disabled-1", etag));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var order = await response.Content.ReadFromJsonAsync<OrderResponse>();
+        Assert.NotNull(order);
+        Assert.NotNull(order.PaymentId);
+
+        var storedPayment = await GetPaymentAsync(order.PaymentId.Value);
+        Assert.NotNull(storedPayment);
+        Assert.Equal("mock", storedPayment.Provider);
+        Assert.Equal("mock", storedPayment.ProviderPaymentId);
     }
 
     [Fact]
@@ -633,6 +694,33 @@ public class CheckoutEndpointTests : IAsyncLifetime
         Assert.Equal("unauthenticated", error.Code);
     }
 
+    private CustomWebApplicationFactory CreateStripeEnabledFactory()
+    {
+        return new CustomWebApplicationFactory(
+            _fixture.ConnectionString,
+            configureTestServices: services =>
+            {
+                services.Configure<StripeOptions>(options =>
+                {
+                    options.Enabled = true;
+                    options.WebhookSecret = "whsec_test_secret_123456";
+                });
+            });
+    }
+
+    private static Task<HttpResponseMessage> ConfirmAsync(
+        HttpClient client,
+        Guid paymentId,
+        string idempotencyKey)
+    {
+        var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/api/payments/{paymentId}/confirm");
+        request.Headers.Add("X-Test-User", Alice);
+        request.Headers.Add("Idempotency-Key", idempotencyKey);
+        return client.SendAsync(request);
+    }
+
     private Task<string> GetAliceCartETagAsync() => GetCartETagAsync(Alice);
 
     private Task<string> AddItemToAliceCartAsync(Guid productId, int quantity) =>
@@ -814,6 +902,12 @@ public class CheckoutEndpointTests : IAsyncLifetime
         return await context.Payments.AsNoTracking().CountAsync();
     }
 
+    private async Task<int> GetPaymentAttemptsCountAsync()
+    {
+        await using var context = CreateContext();
+        return await context.PaymentAttempts.AsNoTracking().CountAsync();
+    }
+
     private async Task<Payment?> GetPaymentAsync(Guid paymentId)
     {
         await using var context = CreateContext();
@@ -913,7 +1007,8 @@ public class CheckoutEndpointTests : IAsyncLifetime
         string Status,
         DateTime CreatedAtUtc,
         DateTime? ConfirmedAtUtc,
-        DateTime? RefundedAtUtc);
+        DateTime? RefundedAtUtc,
+        string? ClientSecret);
 
     private sealed record OrderItemResponse(Guid ProductId, string ProductName, decimal UnitPrice, int Quantity, decimal LineTotal);
 
